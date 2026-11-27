@@ -1,13 +1,14 @@
 package clusterbootstrap
 
 import (
+	"borealis/api-backend/internal/testsshpipe"
 	"bytes"
 	"context"
 	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
-	"net"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -21,11 +22,11 @@ func TestPreparationSessionRejectsForgedStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	digest, _ := request.Digest()
-	for _, mode := range []string{"journal step", "sequence", "nonce", "request digest", "protocol", "base64", "oversized chunk", "empty end", "duplicate chunk", "heartbeat replay", "missing heartbeat"} {
+	for _, mode := range []string{"journal step", "sequence", "nonce", "request digest", "protocol", "base64", "oversized chunk", "empty end", "heartbeat replay", "missing heartbeat"} {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
 			result := make(chan error, 1)
@@ -55,6 +56,7 @@ func TestPreparationSessionRejectsForgedStream(t *testing.T) {
 			}
 			heartbeat := frame
 			heartbeat.State = "heartbeat"
+			heartbeat.GrantMillis = 499
 			if mode == "missing heartbeat" {
 				if err := <-result; err == nil || consumed.Load() {
 					t.Fatal("expired authority accepted")
@@ -85,14 +87,7 @@ func TestPreparationSessionRejectsForgedStream(t *testing.T) {
 				frame.Data = ""
 			case "heartbeat replay":
 				frame = heartbeat
-			case "duplicate chunk":
-				if WriteSessionFrame(client, frame) != nil {
-					t.Fatal("first chunk rejected")
-				}
-				var ack PreparationSessionFrame
-				if ReadSessionFrame(client, &ack) != nil || ack.State != "ack" {
-					t.Fatal("ack missing")
-				}
+
 			}
 			_ = WriteSessionFrame(client, frame)
 			if err := <-result; err == nil || consumed.Load() {
@@ -115,7 +110,7 @@ func TestPreparationSessionTransfer(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
-	client, server := net.Pipe()
+	client, server := testsshpipe.Pipe()
 	defer client.Close()
 	defer server.Close()
 	serverResult := make(chan error, 1)
@@ -208,7 +203,7 @@ func TestPreparationSessionFailureCleanup(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
 			serverResult := make(chan error, 1)

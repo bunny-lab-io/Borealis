@@ -320,20 +320,11 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			})
 		return report(request, "input_transfer_or_cleanup", err)
 	}
-	var sessionErr error
-	if artifacts {
-		sessionErr = clusterbootstrap.ServeArtifactPreparationSessionWithResult(ctx, os.Stdin, os.Stdout, nonce, verify,
-			func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
-				err := receive(ctx, request, input)
-				return clusterbootstrap.PreparationSessionResult{Progress: progress, Completion: completion}, err
-			}, guard.ObserveDeadline)
-	} else {
-		sessionErr = clusterbootstrap.ServePreparationSessionWithProgress(ctx, os.Stdin, os.Stdout, nonce, verify,
-			func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationProgress, error) {
-				err := receive(ctx, request, input)
-				return progress, err
-			}, guard.ObserveDeadline)
-	}
+	sessionErr := clusterbootstrap.ServeSSHPreparation(ctx, os.Stdin, os.Stdout, nonce, artifacts, openBootstrapInput, verify,
+		func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
+			err := receive(ctx, request, input)
+			return clusterbootstrap.PreparationSessionResult{Progress: progress, Completion: completion}, err
+		}, guard.ObserveDeadline)
 	if sessionErr != nil {
 		fatalf("source preparation failed; inspect journal before any write retry")
 	}

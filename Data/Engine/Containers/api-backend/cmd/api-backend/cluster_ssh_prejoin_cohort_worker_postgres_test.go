@@ -2,12 +2,14 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterbootstraptest"
 	"borealis/api-backend/internal/engineidentity"
+	"borealis/api-backend/internal/testsshpipe"
 	"compress/gzip"
 	"context"
 	"errors"
 	"io"
-	"net"
+
 	"os"
 	"reflect"
 	"strings"
@@ -141,12 +143,12 @@ func testPairedNativeTransfer(t *testing.T) {
 						return nil, err
 					}
 					scratch := t.TempDir()
-					local, peer := net.Pipe()
+					local, peer := testsshpipe.Pipe()
 					done := make(chan error, 1)
 					var producing atomic.Bool
 					pulse := make(chan struct{}, 1)
 					go func() {
-						done <- clusterbootstrap.ServePreparationSessionWithProgress(ctx, peer, peer, req.Session.Nonce,
+						done <- clusterbootstraptest.ServePreparationSessionWithProgress(ctx, peer, peer, req.Session.Nonce,
 							func(_ context.Context, r clusterbootstrap.PreparationSessionRequest) error {
 								if r != req {
 									return clusterbootstrap.ErrSessionProtocol
@@ -169,7 +171,7 @@ func testPairedNativeTransfer(t *testing.T) {
 							})
 					}()
 					var revoked atomic.Bool
-					cursor, sendErr := clusterbootstrap.ExchangePreparationProgressSession(ctx, local, local, req, func(c context.Context, w io.Writer) error {
+					cursor, sendErr := clusterbootstraptest.ExchangePreparationProgressSession(ctx, local, local, req, func(c context.Context, w io.Writer) error {
 						producing.Store(true)
 						if i == 0 {
 							if revoke {

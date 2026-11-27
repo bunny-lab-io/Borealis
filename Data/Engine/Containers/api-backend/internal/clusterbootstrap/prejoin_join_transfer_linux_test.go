@@ -71,6 +71,11 @@ func TestConsumePrejoinK3sJoinPreparation(t *testing.T) {
 			consume := func(ctx context.Context, inputs *PreparationInputs, keys *engineidentity.Material, a *PreparationArtifacts, m *K3sJoinMaterial) error {
 				called = true
 				retained = m
+				expectedPlan, _ := artifacts.publicationPlan(ctx, mutationAuthority)
+				actualPlan, err := a.publicationPlan(ctx, mutationAuthority)
+				if err != nil || !a.published || actualPlan.digest != expectedPlan.digest {
+					t.Fatal("journal publication mismatch", err)
+				}
 				if inputs.Verify(ctx, expected, mutationAuthority) != nil || !keys.Equal(identity) || a.verifyBindings(ctx, mutationAuthority) != nil || m.Verify(ctx, expected, source, mutationAuthority) != nil {
 					t.Fatal("unproved composed input")
 				}
@@ -80,7 +85,7 @@ func TestConsumePrejoinK3sJoinPreparation(t *testing.T) {
 				return nil
 			}
 			receive := func(ctx context.Context, in io.Reader) (*PreparationArtifacts, error) {
-				return receivePreparationArtifacts(ctx, parent, expected.Source, expected.K3sVersion, artifacts.postgresReference, in, mutationAuthority, kp, ep)
+				return readPublishedInventories(ctx, expected.Source, expected.K3sVersion, artifacts.postgresReference, in, mutationAuthority, kp, ep)
 			}
 			var err error
 			if mode == "old artifact consumer" {

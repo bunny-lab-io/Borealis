@@ -23,6 +23,7 @@ const MaxPreparationSessionOutputBytes = 16 << 20
 // source/account preparation, retained-fence pre-join identity installation or
 // proof-only reconciliation, never arbitrary commands or consumer startup.
 type PreparationSessionRequest struct {
+	SSHStream         bool                    `json:"ssh_stream,omitempty"`
 	Session           SessionRequest          `json:"session"`
 	Action            string                  `json:"action"`
 	ExpectedBase64    string                  `json:"expected_base64"`
@@ -59,7 +60,7 @@ func preparationSessionRequestWithArtifacts(expected PreparationExpected, manage
 	}
 	r := PreparationSessionRequest{Session: SessionRequest{Protocol: 1, Action: "verify", Nonce: nonce, Binding: expected.Target,
 		Repository: expected.Source.Repository, Release: expected.Source.Release, SourceSHA: expected.Source.SourceSHA,
-		Development: expected.Source.Development, AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source, PostgresReference: postgresReference}
+		Development: expected.Source.Development, AllowQualification: expected.Source.AllowQualification, ManagerSHA256: manager}, SSHStream: true, Action: action, ExpectedBase64: base64.StdEncoding.EncodeToString(raw), IdentitySource: source, PostgresReference: postgresReference}
 	_, err = r.Expected()
 	return r, err
 }
@@ -123,10 +124,13 @@ func (r PreparationSessionRequest) Digest() (string, error) {
 // Data is private base64 payload. Never log frames or return them through API
 // progress. Native completion evidence remains on this private channel only.
 type PreparationSessionFrame struct {
+	Bytes            int64  `json:"bytes,omitempty"`
+	StreamSHA256     string `json:"stream_sha256,omitempty"`
 	Protocol         int    `json:"protocol"`
 	State            string `json:"state"`
 	Nonce            string `json:"nonce"`
 	RequestSHA256    string `json:"request_sha256,omitempty"`
+	GrantMillis      int64  `json:"grant_ms,omitempty"`
 	Sequence         int64  `json:"sequence,omitempty"`
 	Data             string `json:"data,omitempty"`
 	JournalStep      string `json:"journal_step,omitempty"`
@@ -148,71 +152,9 @@ type PreparationSessionResult struct {
 }
 type PreparationSessionResultReceiver func(context.Context, PreparationSessionRequest, io.Reader) (PreparationSessionResult, error)
 
-func ServeArtifactPreparationSessionWithResult(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionResultReceiver, observe func(time.Time) error) error {
-	ctx, cancel := context.WithTimeout(parent, ArtifactPreparationLifetime)
-	defer cancel()
-	return servePreparationSessionResult(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, preparationProfile(true))
-}
-
-// ServePreparationSessionWithProgress adds only a bounded journal cursor to the
-// inspection action. Other actions must return the zero cursor. The cursor is
-// emitted only after complete private transfer, EOF and successful processing.
-func ServePreparationSessionWithProgress(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error) error {
-	ctx, cancel := context.WithTimeout(parent, SessionLifetime)
-	defer cancel()
-	return servePreparationSessionWithProgress(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second})
-}
-
-// ServePreparationSession maintains challenge authority while the receiver
-// consumes a bounded, backpressured stream. Only one unacknowledged chunk may
-// exist. Handler must validate complete transfer and EOF before any mutation.
-// The independent executor watchdog bounds stalled IO/processes as in recovery.
-func ServePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionReceiver, observe func(time.Time) error) error {
-	ctx, cancel := context.WithTimeout(parent, SessionLifetime)
-	defer cancel()
-	return servePreparationSession(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second})
-}
-
-func servePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionReceiver, observe func(time.Time) error, timing sessionTiming) error {
-	if receive == nil {
-		return ErrSessionProtocol
-	}
-	return servePreparationSessionWithProgress(parent, input, output, nonce, verify,
-		func(ctx context.Context, request PreparationSessionRequest, stream io.Reader) (PreparationProgress, error) {
-			return PreparationProgress{}, receive(ctx, request, stream)
-		}, observe, timing)
-}
-
-func servePreparationSessionWithProgress(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error, timing sessionTiming) error {
-	return servePreparationSessionProfile(parent, input, output, nonce, verify, receive, observe, timing, preparationProfile(false))
-}
-
-func ServeArtifactPreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error) error {
-	ctx, cancel := context.WithTimeout(parent, ArtifactPreparationLifetime)
-	defer cancel()
-	return servePreparationSessionProfile(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, preparationProfile(true))
-}
-
-func servePreparationSessionProfile(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionProgressReceiver, observe func(time.Time) error, timing sessionTiming, profile preparationTransportProfile) error {
-	if receive == nil {
-		return ErrSessionProtocol
-	}
-	return servePreparationSessionResult(parent, input, output, nonce, verify, func(ctx context.Context, r PreparationSessionRequest, in io.Reader) (PreparationSessionResult, error) {
-		progress, err := receive(ctx, r, in)
-		return PreparationSessionResult{Progress: progress}, err
-	}, observe, timing, profile)
-}
-
 func servePreparationSessionResult(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string,
-	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionResultReceiver, observe func(time.Time) error, timing sessionTiming, profile preparationTransportProfile) error {
-	if input == nil || output == nil || verify == nil || receive == nil || observe == nil || !digestPattern.MatchString(nonce) {
+	verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionResultReceiver, observe func(time.Time) error, timing sessionTiming, profile preparationTransportProfile, open PreparationStreamOpen) error {
+	if open == nil || input == nil || output == nil || verify == nil || receive == nil || observe == nil || !digestPattern.MatchString(nonce) {
 		return ErrSessionProtocol
 	}
 	ctx, cancel := context.WithCancel(parent)
@@ -229,7 +171,7 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 		return ErrSessionProtocol
 	}
 	var request PreparationSessionRequest
-	if ReadSessionFrame(reader, &request) != nil || request.Session.Nonce != nonce {
+	if ReadSessionFrame(reader, &request) != nil || request.Session.Nonce != nonce || !request.SSHStream {
 		return ErrSessionProtocol
 	}
 	digest, err := request.Digest()
@@ -253,8 +195,8 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 		}
 	}()
 	defer func() { cancel(); input.Close(); <-readDone }()
-	chunks := make(chan []byte)
-	chunkReader := &preparationChunkReader{ctx: ctx, chunks: chunks}
+	endStream := make(chan PreparationStreamReceipt, 1)
+
 	type receiverResult struct {
 		value PreparationSessionResult
 		err   error
@@ -271,9 +213,6 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 		}
 	}()
 	phase := "verify"
-	var pendingChunk []byte
-	defer func() { clear(pendingChunk) }()
-	var sequence, total int64
 	challenge := ""
 	issued := time.Time{}
 	pendingChallenge := false
@@ -294,21 +233,11 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 	ticker := time.NewTicker(timing.challenge)
 	defer ticker.Stop()
 	for {
-		var deliver chan []byte
-		if pendingChunk != nil {
-			deliver = chunks
-		}
 		select {
 		case <-ctx.Done():
 			return ErrSessionAuthority
 		case <-readDone:
 			return ErrSessionProtocol
-		case deliver <- pendingChunk:
-			pendingChunk = nil
-			if send("ack", sequence) != nil {
-				return ErrSessionProtocol
-			}
-			sequence++
 		case frame := <-frames:
 			if frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.JournalStep != "" || frame.CompletionBase64 != "" || !time.Now().Before(deadline) {
 				return ErrSessionProtocol
@@ -317,8 +246,24 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 				if !pendingChallenge || frame.Nonce != challenge || frame.Sequence != 0 || frame.Data != "" {
 					return ErrSessionAuthority
 				}
+				if frame.Bytes != 0 || frame.StreamSHA256 != "" {
+					return ErrSessionProtocol
+				}
 				pendingChallenge = false
-				deadline = issued.Add(timing.window)
+				window := timing.window
+				if request.SSHStream && frame.GrantMillis == 0 {
+					return ErrSessionAuthority
+				}
+				if frame.GrantMillis != 0 {
+					if frame.GrantMillis < 1 || frame.GrantMillis > timing.window.Milliseconds() {
+						return ErrSessionAuthority
+					}
+					window = time.Duration(frame.GrantMillis) * time.Millisecond
+				}
+				deadline = issued.Add(window)
+				if !time.Now().Before(deadline) {
+					return ErrSessionAuthority
+				}
 				expiry.Reset(time.Until(deadline))
 				if observe(deadline) != nil {
 					return ErrSessionAuthority
@@ -329,30 +274,11 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 				}
 				continue
 			}
-			if phase != "receiving" || pendingChunk != nil || frame.Nonce != nonce || frame.Sequence != sequence {
+			if frame.State != "end" || frame.GrantMillis != 0 || phase != "receiving" || frame.Nonce != nonce || frame.Sequence != 0 || frame.Data != "" || frame.Bytes < 1 || frame.Bytes > profile.bytes || !digestPattern.MatchString(frame.StreamSHA256) {
 				return ErrSessionProtocol
 			}
-			switch frame.State {
-			case "chunk":
-				if len(frame.Data) == 0 || len(frame.Data) > base64.StdEncoding.EncodedLen(profile.chunk) {
-					return ErrSessionProtocol
-				}
-				data, err := base64.StdEncoding.Strict().DecodeString(frame.Data)
-				if err != nil || len(data) == 0 || base64.StdEncoding.EncodeToString(data) != frame.Data || total+int64(len(data)) > profile.bytes {
-					clear(data)
-					return ErrSessionProtocol
-				}
-				total += int64(len(data))
-				pendingChunk = data
-			case "end":
-				if frame.Data != "" || total == 0 {
-					return ErrSessionProtocol
-				}
-				close(chunks)
-				phase = "processing"
-			default:
-				return ErrSessionProtocol
-			}
+			endStream <- PreparationStreamReceipt{frame.Bytes, frame.StreamSHA256}
+			phase = "processing"
 		case result := <-finished:
 			working = false
 			if result.err != nil || ctx.Err() != nil || !time.Now().Before(deadline) {
@@ -361,16 +287,27 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 			if phase == "verify" {
 				phase, working = "receiving", true
 				go func() {
-					progress, err := receive(ctx, request, chunkReader)
-					clear(chunkReader.current)
-					finished <- receiverResult{progress, err}
+					data, err := open(ctx, nonce)
+					if err != nil {
+						finished <- receiverResult{err: ErrSessionProtocol}
+						return
+					}
+					stopData := context.AfterFunc(ctx, func() { data.Close() })
+					raw := &preparationStreamReader{ctx: ctx, input: data, end: endStream, hash: sha256.New(), maximum: profile.bytes}
+					value, err := receive(ctx, request, raw)
+					stopData()
+					data.Close()
+					if !raw.verified {
+						err = ErrSessionProtocol
+					}
+					finished <- receiverResult{value, err}
 				}()
 				if send("source_ready", 0) != nil {
 					return ErrSessionProtocol
 				}
 				continue
 			}
-			if phase != "processing" || !chunkReader.eof {
+			if phase != "processing" {
 				return ErrSessionProtocol
 			}
 			if request.Action == "inspect_preparation_progress" {
@@ -394,7 +331,7 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 			} else if result.value.Completion != nil {
 				return ErrSessionProtocol
 			}
-			return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "verified", Nonce: nonce, RequestSHA256: digest, Sequence: sequence, JournalStep: result.value.Progress.Step, CompletionBase64: completionBase64})
+			return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "verified", Nonce: nonce, RequestSHA256: digest, Sequence: 0, JournalStep: result.value.Progress.Step, CompletionBase64: completionBase64})
 		case <-ticker.C:
 			if !pendingChallenge && issue() != nil {
 				return ErrSessionProtocol
@@ -403,34 +340,9 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 	}
 }
 
-type preparationChunkReader struct {
-	ctx     context.Context
-	chunks  <-chan []byte
-	current []byte
-	eof     bool
-}
-
-func (r *preparationChunkReader) Read(p []byte) (int, error) {
-	if len(p) == 0 {
-		return 0, nil
-	}
-	if r.ctx.Err() != nil {
-		return 0, ErrSessionAuthority
-	}
-	if len(r.current) == 0 {
-		select {
-		case data, ok := <-r.chunks:
-			if !ok {
-				r.eof = true
-				return 0, io.EOF
-			}
-			r.current = data
-		case <-r.ctx.Done():
-			return 0, ErrSessionAuthority
-		}
-	}
-	n := copy(p, r.current)
-	clear(r.current[:n])
-	r.current = r.current[n:]
-	return n, nil
+func ServeSSHPreparation(parent context.Context, input io.ReadCloser, output io.WriteCloser, nonce string, artifacts bool, open PreparationStreamOpen, verify func(context.Context, PreparationSessionRequest) error, receive PreparationSessionResultReceiver, observe func(time.Time) error) error {
+	profile := preparationProfile(artifacts)
+	ctx, cancel := context.WithTimeout(parent, profile.lifetime)
+	defer cancel()
+	return servePreparationSessionResult(ctx, input, output, nonce, verify, receive, observe, sessionTiming{SessionChallengeEvery, SessionLeaseWindow, 2 * time.Second}, profile, open)
 }

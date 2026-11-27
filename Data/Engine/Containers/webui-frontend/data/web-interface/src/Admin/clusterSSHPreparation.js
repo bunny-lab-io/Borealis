@@ -9,6 +9,7 @@ const hostname = (value) => typeof value === "string" && /^[a-z0-9](?:[a-z0-9-]{
 const object = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
 const fields = (value, keys) => object(value) && Object.keys(value).length === keys.length && keys.every((key) => Object.hasOwn(value, key));
 const timestamp = (value) => Number.isSafeInteger(value) && value > 0 && value <= 8640000000000;
+export const pairCheckCodes = ["source_inputs","host_profile","replica_capacity","cluster_connectivity","installation_inputs"];
 const checkCodes = ["source_inputs", "host_profile", "replica_capacity", "network_boot", "network_arp", "remaining_prerequisites"];
 const pendingKey = (operationID) => `borealis:ssh-preparation-intent:v1:${operationID}`;
 
@@ -45,15 +46,17 @@ export function clearPendingSSHPreparation(operationID, expected) {
 }
 
 export function preparationProgressEligible(progress, operationID) {
+  const pair = progress?.qualification?.version === 2;
+  const codes = pair ? pairCheckCodes : checkCodes;
   return uuid(operationID) && progress?.operation_id === operationID && progress.state === "waiting"
     && progress.current_step === "qualify_ssh_targets" && Number.isSafeInteger(progress.attempt) && progress.attempt > 0
     && Array.isArray(progress.targets) && [1, 2].includes(progress.targets.length)
     && progress.targets.every((target) => target?.state === "queued" && target.current_step === "qualification_complete"
       && target.credentials_available === true && target.inspected_attempt === progress.attempt && target.report)
-    && progress.qualification?.attempt === progress.attempt && progress.qualification.ready === false
-    && Array.isArray(progress.qualification.checks) && progress.qualification.checks.length === checkCodes.length
-    && progress.qualification.checks.every((check, index) => check?.code === checkCodes[index]
-      && check.state === (index === checkCodes.length - 1 ? "pending" : "passed"));
+    && progress.qualification?.attempt === progress.attempt && progress.qualification.ready === pair && (pair ? progress.targets.length === 2 : progress.qualification.version === 1 && progress.targets.length === 1)
+    && Array.isArray(progress.qualification.checks) && progress.qualification.checks.length === codes.length
+    && progress.qualification.checks.every((check, index) => check?.code === codes[index]
+      && check.state === (!pair && index === codes.length - 1 ? "pending" : "passed"));
 }
 
 // Receipt age is only a browser stale-display guard. The API owns proposal

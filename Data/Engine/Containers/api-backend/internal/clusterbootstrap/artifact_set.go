@@ -17,6 +17,7 @@ type PreparationArtifacts struct {
 	k3s                           *K3sSet
 	external                      *ExternalImageSet
 	postgres                      *PostgresImage
+	published                     bool
 	approval                      *preparationStreamProof
 }
 
@@ -51,8 +52,7 @@ func (a *PreparationArtifacts) verifyBindings(ctx context.Context, check func(co
 	defer a.external.mu.Unlock()
 	a.postgres.set.mu.Lock()
 	defer a.postgres.set.mu.Unlock()
-	if a.application.root == nil || a.application.inventory == nil || a.k3s.root == nil || a.k3s.inventory == nil ||
-		a.external.root == nil || a.external.inventory == nil || a.postgres.set.root == nil || a.postgres.set.inventory == nil {
+	if (!a.published && (a.application.root == nil || a.k3s.root == nil || a.external.root == nil || a.postgres.set.root == nil)) || a.application.inventory == nil || a.k3s.inventory == nil || a.external.inventory == nil || a.postgres.set.inventory == nil {
 		return ErrImageArchive
 	}
 	app, k3s, external := a.application.inventory, a.k3s.inventory, a.external.inventory

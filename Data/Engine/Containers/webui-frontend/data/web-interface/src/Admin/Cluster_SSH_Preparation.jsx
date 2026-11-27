@@ -176,7 +176,7 @@ export default function ClusterSSHPreparation({ operationID, progress, receivedA
   const canSubmit = usable && !confirmation && !uncertain && !busy && sourceID && phrase === SSH_PREPARATION_CONFIRMATION;
   return <Stack spacing={1.5} aria-label="Preparation confirmation">
     <Typography sx={{ fontWeight: 600 }}>Preparation confirmation</Typography>
-    <Typography variant="body2">Review the exact hosts and choose the original Engine whose shared identity they will inherit. Confirmation records intent. Preparation and joining require separate readiness approval.</Typography>
+    <Typography variant="body2">{progress?.qualification?.version === 2 ? "Review both hosts and the Engine whose shared identity they will inherit. Approval starts installation. Both hosts stay drained until the original Engine admits them together." : "Review the replacement host and choose the surviving Engine whose shared identity it will inherit."}</Typography>
     {!eligible || !fresh || cancelling ? <Alert severity="warning">Preparation confirmation needs current, completed inspection checks and available credentials. Retained readiness results above remain observations.</Alert> : null}
     {error ? <Alert severity="warning">{error}</Alert> : null}
     <Button sx={DIALOG_BUTTON_SX} disabled={!eligible || !fresh || cancelling || busy} onClick={() => void load()}>Review preparation</Button>
@@ -185,7 +185,7 @@ export default function ClusterSSHPreparation({ operationID, progress, receivedA
       <Typography variant="body2">Release {plan.baseline_release}</Typography>
       <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>Source commit: {plan.source_sha}<br />Plan: {plan.plan_sha256}</Typography>
       {plan.targets.map((target) => <Typography key={target.target_id} variant="body2" sx={{ overflowWrap: "anywhere" }}>{target.hostname} · {target.address}:{target.port}<br />{target.host_key_fingerprint}</Typography>)}
-      {confirmation ? <Alert severity="info">Confirmation recorded for identity source {selected?.hostname}. Confirmation alone does not authorize preparation or joining.<br />Request: {confirmation.request_id}</Alert> : <>
+      {confirmation ? <Alert severity="info">Confirmation recorded for identity source {selected?.hostname}. {progress?.qualification?.version === 2 ? "The original Engine will dispatch the approved installation." : "Confirmation alone does not authorize replacement. The controller verifies readiness before installation."}<br />Request: {confirmation.request_id}</Alert> : <>
         <TextField select label="Original identity source" value={sourceID} onChange={(event) => setSourceID(event.target.value)}
           disabled={!usable || busy || Boolean(uncertain)} fullWidth sx={DIALOG_SELECT_SX}>
           {plan.identity_sources.map((source) => <MenuItem key={source.source_id} value={source.source_id}>{source.hostname}</MenuItem>)}

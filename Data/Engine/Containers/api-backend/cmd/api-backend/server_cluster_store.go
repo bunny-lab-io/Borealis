@@ -1149,7 +1149,44 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 			return nil, fmt.Errorf("%w: running or completed operation cannot be cancelled", errClusterConflict)
 		}
 		if kind == "ssh_onboarding" {
-			if err := cancelClusterSSHInspectionTargets(ctx, tx, operationID, currentStep); err != nil {
+			if q, e := pairReport(payloadJSON); e == nil && q.Ready && state == "running" && currentStep == clusterSSHPreparationOperationStep {
+				var entered, completed bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$2), (payload_json::jsonb ? 'ssh_preparation')
+                    FROM engine.cluster_operations WHERE id=$1`, operationID, sshPreparationAllocated).Scan(&entered, &completed); err != nil {
+					return nil, err
+				}
+				if completed {
+					return nil, errClusterConflict
+				}
+				if entered {
+					// Keep the operation and both targets in custody. Cancellation
+					// revokes every new grant, including a queued recovery pass.
+					const message = clusterSSHPairStopReason
+					res, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET error_text=$2,updated_at=$3 WHERE id=$1 AND coalesce(error_text,'')<>$2`, operationID, message, now)
+					if err != nil {
+						return nil, err
+					}
+					n, err := res.RowsAffected()
+					if err != nil {
+						return nil, err
+					}
+					if n == 1 {
+						if err = insertClusterEvent(ctx, tx, operationID, "", "", "ssh_pair_stop_requested", state, message, map[string]any{"attempt": attempt}, now); err != nil {
+							return nil, err
+						}
+						if err = insertClusterAudit(ctx, tx, actor, "operation_cancel", operationID, state, map[string]any{"kind": kind, "attempt": attempt}, now); err != nil {
+							return nil, err
+						}
+					}
+					if err = tx.Commit(); err != nil {
+						return nil, err
+					}
+					return map[string]any{"operation_id": operationID, "kind": kind, "state": state, "current_step": currentStep, "attempt": attempt, "stop_requested": true}, nil
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_onboarding_targets SET state='cancelled',credential_state='required',lease_holder='',lease_expires_at=0,lease_generation=lease_generation+1,updated_at=$2 WHERE operation_id=$1`, operationID, now); err != nil {
+					return nil, err
+				}
+			} else if err := cancelClusterSSHInspectionTargets(ctx, tx, operationID, currentStep); err != nil {
 				return nil, err
 			}
 		}

@@ -51,6 +51,10 @@ func readClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 		if err != nil || validateClusterSSHInspectionCohort(frozen.Cohort, frozen.Source) != nil || len(selection) != len(frozen.Cohort.Targets) {
 			return clusterbootstrap.ErrPreparationConfig
 		}
+		// Pinned pair execution checks the physical filesystem once at this
+		// allocation boundary. Independent custody continues through SSH.
+		_, pairOwned := ctx.Value(clusterSSHPairOwnerKey{}).(func(context.Context) error)
+		pair := pairOwned && len(selection) == 2
 		raw, err := json.Marshal(frozen)
 		var owned clusterSSHPreparationAuthority
 		if err != nil || json.Unmarshal(raw, &owned) != nil {
@@ -67,6 +71,9 @@ func readClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 		current := func() error {
 			if readers.Refresh(ctx) != nil {
 				return clusterbootstrap.ErrPreparationConfig
+			}
+			if pair {
+				return ctx.Err()
 			}
 			a, err := readers.Authority(ctx)
 			a.Cohort.ObservedAt = 0
@@ -104,6 +111,9 @@ func readClusterSSHTargetFilesystemEvidence(parent context.Context, readers clus
 		first, err := read()
 		if err != nil {
 			return clusterbootstrap.ErrPreparationConfig
+		}
+		if pair {
+			return consume(ctx, first)
 		}
 		second, err := read()
 		if err != nil || !mergeClusterSSHFilesystemAvailability(first, second, false) {

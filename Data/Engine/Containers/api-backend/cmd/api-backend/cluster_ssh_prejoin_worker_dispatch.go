@@ -67,8 +67,8 @@ func reportClusterSSHPrejoinCheck(ctx context.Context, check string) {
 }
 
 // Production composition for the existing API executor. Every original target
-// reaches configuration before any startup. Fresh retained scopes re-prove the
-// complete cohort before each start; controller admission remains separate.
+// reaches configuration before consecutive drained starts. The controller
+// holds application admission until both native receipts have been verified.
 func newClusterSSHNativePrejoinPreparationWorker(store *postgresOperatorStore, aegis *goAegisService,
 	scratchParent string, process clusterExistingIdentitySourceProcess, getJSON func(context.Context, string, any) error) *clusterSSHPreparationWorker {
 	if getJSON == nil {
@@ -123,7 +123,7 @@ func newClusterSSHPrejoinWorkerWithClient(store *postgresOperatorStore, aegis *g
 			claim := claims[index]
 			ctx = context.WithValue(ctx, clusterSSHPrejoinLeaseKey{}, claim.Lease)
 			acquire := func(ctx context.Context, consume clusterSSHPrejoinWorkerSourceConsumer) error {
-				return withClusterSSHPreparationSourceFor(ctx, scratchParent, store, aegis, claim.Lease, baseline, claim.Sealed, true, consume, beforeAllocation, client)
+				return withClusterSSHPreparationSourceFor(ctx, scratchParent, store, aegis, claim.Lease, baseline, claim.Sealed, true, consume, beforeAllocation, client, current)
 			}
 			return store.observeSSHPreparationStages(ctx, claim.Lease, func(ctx context.Context) error {
 				return withClusterSSHPrejoinWorkerInputs(ctx, claim, baseline, confirmation, source,
@@ -133,11 +133,13 @@ func newClusterSSHPrejoinWorkerWithClient(store *postgresOperatorStore, aegis *g
 						nativeEntered.Store(true)
 						return withClusterSSHPrejoinNativeScope(ctx, store, aegis, source, claim, baseline, inputs, artifacts, postgres, expected,
 							checks.Authority, checks.K3sJoin, true, func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
-								target.inputs = checks.Inputs
 								return consume(ctx, expected, target)
 							})
 					}, current)
 			})
+		}
+		if len(claims) == 2 {
+			ctx = context.WithValue(ctx, clusterSSHSharedArtifactsKey{}, &clusterSSHSharedArtifacts{})
 		}
 		result, err := dispatchClusterSSHPrejoinCohort(ctx, claims, baseline, binding, scope, current)
 		if directory != "" {
@@ -233,10 +235,7 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 		}
 		return value, nil
 	}
-	// Freeze current complete authority while reusing the worker's whole-cohort
-	// renewal at each boundary. Never replace it with this target's receipt.
-	boundary := newClusterSSHPreparationLeaseCheck(read, current)
-	check := func(ctx context.Context) error { return lifetime.run(ctx, boundary) }
+	check := func(caller context.Context) error { return lifetime.run(caller, current) }
 	if check(ctx) != nil {
 		return fail
 	}
@@ -260,76 +259,39 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 			return fail
 		}
 		expected.PeerAddresses = slices.Clone(expected.PeerAddresses)
-		wrap := func(label string, prove func(context.Context) error) func(context.Context) error {
+		// Bind borrowed capabilities to this source lifetime. Each domain
+		// owns its own checks. Only the operation heartbeat renews claims.
+		bind := func(label string, observe func(context.Context) error) func(context.Context) error {
 			return func(caller context.Context) error {
-				return lifetime.run(caller, func(bound context.Context) error {
-					if check(bound) != nil {
-						reportClusterSSHPrejoinCheck(bound, label+" cohort authority before")
-						return fail
-					}
-					if prove(bound) != nil {
-						reportClusterSSHPrejoinCheck(bound, label+" source proof")
-						return fail
-					}
-					if check(bound) != nil {
-						reportClusterSSHPrejoinCheck(bound, label+" cohort authority after")
-						return fail
-					}
-					return nil
-				})
-			}
-		}
-		storageRead := checks.Storage
-		checks.Storage = func(caller context.Context) (clusterSSHStorageSnapshot, error) {
-			var value clusterSSHStorageSnapshot
-			err := lifetime.run(caller, func(bound context.Context) error {
-				var err error
-				if check(bound) != nil {
-					return fail
-				}
-				value, err = storageRead(bound)
-				if err != nil || check(bound) != nil {
-					return fail
-				}
-				return nil
-			})
-			if err != nil {
-				return clusterSSHStorageSnapshot{}, fail
-			}
-			return value, nil
-		}
-		joined := checks.K3sJoin
-		checks.Inputs = wrap("full input", checks.Inputs)
-		if checks.bindPairedRenewal != nil {
-			// check verifies the frozen selected confirmation on both sides of
-			// the worker's fresh read/renew/read of every original claim.
-			// The source brackets that whole proof with its own frozen reads.
-			paired := checks.bindPairedRenewal(check)
-			checks.Authority = func(caller context.Context) error {
-				err := lifetime.run(caller, paired)
+				err := lifetime.run(caller, observe)
 				if err != nil {
-					reportClusterSSHPrejoinCheck(caller, "preparation authority paired source proof")
+					reportClusterSSHPrejoinCheck(ctx, label)
 				}
 				return err
 			}
-			checks.bindPairedRenewal = nil
-		} else {
-			checks.Authority = wrap("preparation authority", checks.Authority)
 		}
+		checks.Authority = bind("native execution deadline", checks.Authority)
+		checks.Inputs = bind("approved installation inputs", checks.Inputs)
+		readStorage := checks.Storage
+		checks.Storage = func(caller context.Context) (value clusterSSHStorageSnapshot, err error) {
+			err = lifetime.run(caller, func(ctx context.Context) error {
+				value, err = readStorage(ctx)
+				return err
+			})
+			return
+		}
+		joined := checks.K3sJoin
 		checks.K3sJoin = func(caller context.Context, binding engineidentity.Binding, consume clusterSSHJoinMaterialConsumer) error {
-			return lifetime.run(caller, func(bound context.Context) error {
-				if binding != source.Binding || consume == nil || check(bound) != nil {
+			return lifetime.run(caller, func(ctx context.Context) error {
+				if binding != source.Binding || consume == nil {
 					return fail
 				}
-				if joined(bound, binding, func(ctx context.Context, material *clusterbootstrap.K3sJoinMaterial, joinCheck func(context.Context) error) error {
-					if joinCheck == nil || check(ctx) != nil {
+				return joined(ctx, binding, func(ctx context.Context, m *clusterbootstrap.K3sJoinMaterial, check func(context.Context) error) error {
+					if check == nil {
 						return fail
 					}
-					return consume(ctx, material, wrap("join material", joinCheck))
-				}) != nil || check(bound) != nil {
-					return fail
-				}
-				return nil
+					return consume(ctx, m, bind("join custody", check))
+				})
 			})
 		}
 		capacity.Target = slices.Clone(capacity.Target)
@@ -343,13 +305,13 @@ func withClusterSSHPrejoinWorkerInputs(parent context.Context, claim clusterSSHN
 			reportClusterSSHPrejoinCheck(ctx, "target filesystem capacity")
 			return fail
 		}
-		if checks.Inputs(ctx) != nil {
-			reportClusterSSHPrejoinCheck(ctx, "input snapshot after target storage")
+		if err := check(ctx); err != nil {
+			reportClusterSSHPrejoinCheck(ctx, "ownership after storage qualification")
 			return fail
 		}
 		nativeExpected := expected
 		nativeExpected.PeerAddresses = slices.Clone(expected.PeerAddresses)
-		if consume(ctx, inputs, artifacts, postgres, nativeExpected, checks) != nil || checks.Inputs(ctx) != nil || ctx.Err() != nil {
+		if consume(ctx, inputs, artifacts, postgres, nativeExpected, checks) != nil || check(ctx) != nil || ctx.Err() != nil {
 			cancel()
 			return fail
 		}

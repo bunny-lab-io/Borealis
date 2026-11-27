@@ -79,7 +79,12 @@ func newClusterSSHPreparationRecoverySourceRead(value clusterSSHPreparationRecov
 		return unavailableClusterSSHPreparationRecoverySourceRead
 	}
 	projection := clusterSSHPreparationRecoverySourceProjection{Baseline: owned.Baseline, Cohort: owned.Cohort, Source: owned.Source,
-		PlanSHA256: record.PlanSHA256, Version: version, Approved: readiness.Checks[4].SHA256, TargetCount: len(owned.Leases)}
+		PlanSHA256: record.PlanSHA256, Version: version, TargetCount: len(owned.Leases)}
+	if readiness.Version == 5 {
+		projection.Approved, projection.PlanSHA256 = readiness.Configuration, owned.Authorization.InspectionSHA256
+	} else {
+		projection.Approved = readiness.Checks[4].SHA256
+	}
 	return newClusterSSHPreparationRecoverySourceProjectionRead(projection, check, getJSON, network,
 		func(index int, version, pods, services string) (clusterbootstrap.PreparationExpected, error) {
 			return buildClusterSSHPreparationRecoveryExpected(owned, payload, index, version, pods, services)

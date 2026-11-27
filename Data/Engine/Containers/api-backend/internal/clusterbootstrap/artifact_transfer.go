@@ -47,6 +47,9 @@ func (a *PreparationArtifacts) WriteArtifacts(ctx context.Context, output io.Wri
 
 // Caller holds the artifact set lock through the complete write.
 func (a *PreparationArtifacts) writeArtifacts(ctx context.Context, output io.Writer, check func(context.Context) error) error {
+	if a.published {
+		return ErrImageArchive
+	}
 	if err := a.verifyBindings(ctx, check); err != nil {
 		return err
 	}

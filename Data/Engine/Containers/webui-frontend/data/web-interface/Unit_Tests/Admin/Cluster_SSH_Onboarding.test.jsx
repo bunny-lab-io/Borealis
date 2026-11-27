@@ -89,9 +89,13 @@ describe("SSH cohort inspection dialog", () => {
     expect(screen.queryByRole("button", { name: /Prepare|Join hosts/ })).toBeNull();
   });
 
-  it("preserves pending readiness and serializes explicit confirmation against cancellation", async () => {
+  it("uses the qualified pair plan and serializes explicit confirmation against cancellation", async () => {
     const value = progress(); value.qualification = qualification();
-    value.qualification.checks.forEach((check, index) => { check.state = index === 5 ? "pending" : "passed"; });
+    value.qualification.version = 2;
+    value.qualification.ready = true;
+    value.qualification.checks = ["source_inputs","host_profile","replica_capacity","cluster_connectivity","installation_inputs"].map((code) => ({code,state:"passed"}));
+    value.qualification.storage = value.targets.map((target) => ({ target_id:target.id, storage_path:"/var/lib/longhorn", fits:true,
+      budgets:[{filesystem:"0000000000000001",available_bytes:256,other_bytes:32,replica_bytes:16,rebuild_bytes:16,minimum_free_bytes:8,logical_limit_bytes:64,fits:true}] }));
     value.targets.forEach((target) => { target.state = "queued"; target.current_step = "qualification_complete"; });
     const sourceID = "33333333-3333-4333-8333-333333333333";
     const plan = { operation_id: requestID, attempt: 1, plan_sha256: "a".repeat(64), baseline_release: "2026.9.5.1", source_sha: "b".repeat(40),
@@ -111,7 +115,7 @@ describe("SSH cohort inspection dialog", () => {
     });
     vi.stubGlobal("fetch", fetch);
     render(<ClusterSSHOnboarding initialOperationID={requestID} onClose={vi.fn()} onChanged={changed} />);
-    await screen.findByText("Remaining join prerequisites: Pending");
+    await screen.findByText("Pinned installation inputs: Observed");
     expect(fetch).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByRole("button", { name: "Review preparation" }));
     fireEvent.mouseDown(await screen.findByLabelText("Original identity source"));
@@ -125,8 +129,8 @@ describe("SSH cohort inspection dialog", () => {
     await act(async () => finishReview(response(plan)));
     await screen.findByText(/Confirmation recorded for identity source/);
     expect(changed).toHaveBeenCalledTimes(1);
-    expect(screen.getByText("Remaining join prerequisites: Pending")).toBeInTheDocument();
-    expect(screen.getByText(/Joining remains unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("Pinned installation inputs: Observed")).toBeInTheDocument();
+    expect(screen.queryByText(/Joining remains unavailable/)).toBeNull();
     expect(fetch.mock.calls.filter(([path]) => path.endsWith("/prepare"))).toHaveLength(1);
   });
 

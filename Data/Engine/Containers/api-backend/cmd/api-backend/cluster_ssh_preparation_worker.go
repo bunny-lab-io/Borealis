@@ -91,13 +91,12 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 	digest := sha256.Sum256([]byte(work.Payload))
 	payloadHash := hex.EncodeToString(digest[:])
 	readers := make([]clusterSSHPreparationAuthorityRead, len(claims))
-	checks := make([]func(context.Context) error, len(claims))
 	for i, claim := range claims {
 		target, reserved := proof.Cohort.Targets[i], authorization.Targets[i]
 		credentialHash, err := clusterSSHPreparationDigest([]string{claim.Sealed.generation, claim.Sealed.ciphertext})
 		if !validClusterSSHPreparationLease(claim.Lease) || claim.Lease.OperationID != proof.Cohort.OperationID ||
 			claim.Lease.OperationAttempt != proof.Cohort.Attempt || claim.Lease.ControllerHolder != proof.Cohort.ControllerHolder ||
-			claim.Lease.TargetID != target.Binding.TargetID || claim.Lease.Generation != reserved.QualificationGeneration+1 ||
+			claim.Lease.TargetID != target.Binding.TargetID || claim.Lease.Generation != reserved.QualificationGeneration+1+pairRecoveryOffset(work.Payload) ||
 			claim.Sealed.binding != target.Binding || err != nil || credentialHash != reserved.CredentialSHA256 {
 			return clusterbootstrap.ErrPreparationConfig
 		}
@@ -113,30 +112,26 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			}
 			return value, nil
 		}
-		checks[i] = newClusterSSHPreparationLeaseCheck(readers[i], func(ctx context.Context) error {
-			return w.store.renewClusterSSHPreparationTarget(ctx, claim.Lease, claim.Sealed)
-		})
+		if _, err := readers[i](parent); err != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+	}
+	if qualification, err := pairReport(work.Payload); err == nil {
+		parent = context.WithValue(parent, clusterSSHPairManifestKey{}, qualification.Installation.Manifests)
 	}
 	if w.cohort != nil {
 		parent = context.WithValue(parent, clusterSSHPrejoinDiagnosticKey{}, &clusterSSHPrejoinDiagnostic{operation: claims[0].Lease.OperationID, started: time.Now()})
 	}
-	checkAll := func(ctx context.Context) error {
-		for i, check := range checks {
-			if check(context.WithValue(ctx, clusterSSHPrejoinLeaseKey{}, claims[i].Lease)) != nil {
-				return clusterbootstrap.ErrSessionAuthority
-			}
-		}
-		return ctx.Err()
-	}
 	results := make([]clusterSSHPreparationResult, len(claims))
 	prepared := make([]clusterSSHPrejoinCompletion, len(claims))
 	maximum := clusterSSHPreparationWorkerBudget(w.prejoin != nil || w.cohort != nil, len(claims))
-	if w.cohort != nil {
-		// One preparation pass and one independently retained-scope start pass
-		// per target. Each inner source/native phase keeps its original ceiling.
-		maximum *= 2
+	if _, err := pairReport(work.Payload); err == nil {
+		hardLimit := time.Unix(confirmation.ConfirmedAt, 0).Add(maximum)
+		var cancel context.CancelFunc
+		parent, cancel = context.WithDeadline(parent, hardLimit)
+		defer cancel()
 	}
-	err = runClusterSSHPreparationScopeFor(parent, w.interval, maximum, checkAll, func(scope context.Context) error {
+	err = w.store.withSSHOperationOwnership(parent, w.aegis, work, w.interval, maximum, func(scope context.Context, checkAll func(context.Context) error) error {
 		ctx, cancel := context.WithCancel(scope)
 		defer cancel()
 		boundary := clusterSSHPreparationBoundary(ctx, checkAll, func(context.Context) error { return nil })

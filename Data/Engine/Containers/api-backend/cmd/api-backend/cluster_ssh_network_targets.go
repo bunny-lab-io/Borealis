@@ -33,6 +33,8 @@ type clusterSSHNetworkTargetReaders struct {
 	Peer       clusterSSHTargetNetworkRead
 	Boot       clusterSSHTargetNetworkBootRead
 	ARP        clusterSSHTargetARPRead
+	SystemDisk func(context.Context, clusterSSHInspectedTarget, string) (uint64, error)
+	Proposal   func(context.Context, clusterSSHInspectedTarget, clusterremote.PreparationProposal) (clusterremote.PreparationProposalProof, error)
 	Filesystem func(context.Context, clusterSSHInspectedTarget, clusterremote.FilesystemRequest) (clusterremote.TargetFilesystem, error)
 }
 
@@ -54,6 +56,9 @@ func withClusterSSHNetworkTargets(parent context.Context, store *postgresOperato
 			return newClusterSSHPreparationAuthorityRead(store, aegis, claim.Lease, baseline, claim.Sealed)
 		},
 		renew: func(ctx context.Context, claim clusterSSHNetworkTargetClaim) error {
+			if _, owned := clusterbootstrap.PreparationTimeRemaining(ctx); owned && validClusterSSHPreparationLease(claim.Lease) {
+				return clusterbootstrap.CheckPreparationDeadline(ctx)
+			}
 			return store.renewClusterSSHObservationTarget(ctx, claim.Lease, claim.Sealed)
 		},
 		open: aegis.openClusterSSHCredentials,
@@ -244,9 +249,17 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 	renewOnRead := !claims[0].Lease.isNetworkQualification()
 	authority := func(ctx context.Context) (clusterSSHPreparationAuthority, error) { return verify(ctx, renewOnRead) }
 	check := func(ctx context.Context) error { _, err := verify(ctx, true); return err }
-	return runClusterSSHPreparationScopeFor(parent, time.Second, claims[0].Lease.networkTargetBudget(), check, func(ctx context.Context) (result error) {
+	owner, _ := parent.Value(clusterSSHPairOwnerKey{}).(func(context.Context) error)
+	if owner != nil {
+		check = clusterbootstrap.CheckPreparationDeadline
+		authority = dependencies.authority(claims[0])
+		if authority == nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+	}
+	use := func(ctx context.Context) (result error) {
 		frozen, err := authority(ctx)
-		if err != nil {
+		if err != nil || validateClusterSSHNetworkClaims(frozen, baseline, claims) != nil {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		readerCtx, cancelReaders := context.WithCancel(ctx)
@@ -305,6 +318,9 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 				}
 				if current(ctx) != nil {
 					return clusterbootstrap.ErrPreparationConfig
+				}
+				if owner != nil && owner(ctx) != nil {
+					return clusterbootstrap.ErrSessionAuthority
 				}
 				envelope, err := dependencies.open(ctx, claim.Sealed, item.Binding)
 				if err != nil || envelope.Binding != item.Binding || envelope.validate() != nil || current(ctx) != nil {
@@ -373,6 +389,26 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 			}
 			return value, nil
 		}
+		readers.SystemDisk = func(ctx context.Context, item clusterSSHInspectedTarget, vip string) (n uint64, err error) {
+			err = read(ctx, item, nil, func(clusterSSHInspectedTarget) bool { return vip == frozen.Source.ControlPlaneVIP },
+				func(ctx context.Context, _ clusterSSHInspectedTarget, client *clusterremote.Client, sudo []byte, _ func(context.Context) error) error {
+					var err error
+					n, err = client.InspectPairSystem(ctx, sudo, vip)
+					return err
+				})
+			return
+		}
+		readers.Proposal = func(caller context.Context, item clusterSSHInspectedTarget, request clusterremote.PreparationProposal) (proof clusterremote.PreparationProposalProof, err error) {
+			err = read(caller, item, nil, func(host clusterSSHInspectedTarget) bool {
+				return request.TargetID == host.Binding.TargetID && request.HostKeyFingerprint == host.Binding.Fingerprint &&
+					request.OperationID == frozen.Lease.OperationID && request.MachineID == host.Report.MachineID && request.BootID == host.Report.BootID
+			}, func(ctx context.Context, _ clusterSSHInspectedTarget, client *clusterremote.Client, sudo []byte, check func(context.Context) error) error {
+				var err error
+				proof, err = client.InspectPreparationProposal(ctx, sudo, request, check)
+				return err
+			})
+			return
+		}
 		readers.Filesystem = func(caller context.Context, item clusterSSHInspectedTarget, request clusterremote.FilesystemRequest) (clusterremote.TargetFilesystem, error) {
 			request.Paths = slices.Clone(request.Paths)
 			var value clusterremote.TargetFilesystem
@@ -428,7 +464,11 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		return check(ctx)
-	})
+	}
+	if owner != nil {
+		return use(parent)
+	}
+	return runClusterSSHPreparationScopeFor(parent, time.Second, claims[0].Lease.networkTargetBudget(), check, use)
 }
 
 func clusterSSHNetworkTargetPeers(a clusterSSHPreparationAuthority, management string) []string {

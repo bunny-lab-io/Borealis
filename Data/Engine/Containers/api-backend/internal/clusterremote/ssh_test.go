@@ -149,57 +149,61 @@ func newFakeSSH(t *testing.T, mode string, execute ...func(string, ssh.Channel) 
 					if err != nil {
 						return
 					}
-					for request := range requests {
-						if request.Type != "exec" {
-							request.Reply(false, nil)
-							continue
-						}
-						var command struct{ Command string }
-						if ssh.Unmarshal(request.Payload, &command) != nil || !(len(execute) == 1 || command.Command == inspectionCommand || strings.HasPrefix(mode, "privileged") && command.Command == privilegedInspectionCommand) || strings.Contains(command.Command, string(server.password)) {
-							request.Reply(false, nil)
-							channel.Close()
-							continue
-						}
-						server.execCalls.Add(1)
-						request.Reply(true, nil)
-						if len(execute) == 1 {
-							status := execute[0](command.Command, channel)
-							channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
-							channel.Close()
-							continue
-						}
-						if strings.HasPrefix(mode, "privileged") && mode != "privileged nopasswd" {
-							input, err := io.ReadAll(channel)
-							if err != nil || !bytes.Equal(input, append(bytes.Clone(server.password), '\n')) {
-								channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+					wait.Add(1)
+					go func() {
+						defer wait.Done()
+						for request := range requests {
+							if request.Type != "exec" {
+								request.Reply(false, nil)
+								continue
+							}
+							var command struct{ Command string }
+							if ssh.Unmarshal(request.Payload, &command) != nil || !(len(execute) == 1 || command.Command == inspectionCommand || strings.HasPrefix(mode, "privileged") && command.Command == privilegedInspectionCommand) || strings.Contains(command.Command, string(server.password)) {
+								request.Reply(false, nil)
 								channel.Close()
 								continue
 							}
-						}
-						if mode == "hang" || mode == "privileged hang" {
-							continue
-						}
-						status := uint32(0)
-						switch mode {
-						case "stdout overflow", "privileged stdout overflow":
-							channel.Write(bytes.Repeat([]byte("x"), MaxOutputBytes+1))
-						case "stderr overflow", "privileged stderr overflow":
-							channel.Stderr().Write(bytes.Repeat([]byte("x"), MaxOutputBytes+1))
-						case "secret error", "privileged secret error":
-							channel.Stderr().Write(server.password)
-							status = 1
-						case "malformed", "privileged malformed":
-							channel.Write([]byte("credential=" + string(server.password) + "\n"))
-						default:
-							if strings.HasPrefix(mode, "privileged") {
-								channel.Write([]byte(privilegedHostFixture))
-							} else {
-								channel.Write([]byte(inspectedHostFixture))
+							server.execCalls.Add(1)
+							request.Reply(true, nil)
+							if len(execute) == 1 {
+								status := execute[0](command.Command, channel)
+								channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+								channel.Close()
+								continue
 							}
+							if strings.HasPrefix(mode, "privileged") && mode != "privileged nopasswd" {
+								input, err := io.ReadAll(channel)
+								if err != nil || !bytes.Equal(input, append(bytes.Clone(server.password), '\n')) {
+									channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{1}))
+									channel.Close()
+									continue
+								}
+							}
+							if mode == "hang" || mode == "privileged hang" {
+								continue
+							}
+							status := uint32(0)
+							switch mode {
+							case "stdout overflow", "privileged stdout overflow":
+								channel.Write(bytes.Repeat([]byte("x"), MaxOutputBytes+1))
+							case "stderr overflow", "privileged stderr overflow":
+								channel.Stderr().Write(bytes.Repeat([]byte("x"), MaxOutputBytes+1))
+							case "secret error", "privileged secret error":
+								channel.Stderr().Write(server.password)
+								status = 1
+							case "malformed", "privileged malformed":
+								channel.Write([]byte("credential=" + string(server.password) + "\n"))
+							default:
+								if strings.HasPrefix(mode, "privileged") {
+									channel.Write([]byte(privilegedHostFixture))
+								} else {
+									channel.Write([]byte(inspectedHostFixture))
+								}
+							}
+							channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
+							channel.Close()
 						}
-						channel.SendRequest("exit-status", false, ssh.Marshal(struct{ Status uint32 }{status}))
-						channel.Close()
-					}
+					}()
 				}
 			}()
 		}

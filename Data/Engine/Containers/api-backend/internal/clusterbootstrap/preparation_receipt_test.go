@@ -2,12 +2,13 @@ package clusterbootstrap
 
 import (
 	"borealis/api-backend/internal/engineidentity"
+	"borealis/api-backend/internal/testsshpipe"
 	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
-	"net"
+
 	"strings"
 	"testing"
 	"time"
@@ -87,7 +88,7 @@ func TestPrejoinPreparationReceiptSession(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
 			done := make(chan error, 1)
@@ -185,9 +186,10 @@ func TestPrejoinPreparationReceiptSenderRejectsForgedFrame(t *testing.T) {
 			digest, _ := request.Digest()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
+			go io.Copy(io.Discard, server.Data)
 			done := make(chan struct{})
 			go func() {
 				defer close(done)

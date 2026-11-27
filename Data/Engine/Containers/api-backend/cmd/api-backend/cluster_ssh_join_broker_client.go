@@ -83,8 +83,12 @@ func (c *clusterSSHJoinBrokerClient) withMaterial(parent context.Context, expect
 	readerCtx, cancelReaders := context.WithCancel(scope)
 	lifetime := &clusterSSHNetworkReaderLifetime{ctx: readerCtx, cancel: cancelReaders}
 	defer lifetime.close()
+	duringTransfer := check
+	if _, bounded := clusterbootstrap.PreparationTimeRemaining(scope); bounded {
+		duringTransfer = clusterbootstrap.CheckPreparationDeadline
+	}
 	refresh := func(ctx context.Context) error {
-		if lifetime.run(ctx, check) != nil {
+		if lifetime.run(ctx, duringTransfer) != nil {
 			return fail
 		}
 		return nil

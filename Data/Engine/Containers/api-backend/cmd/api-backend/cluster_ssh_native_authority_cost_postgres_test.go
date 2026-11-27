@@ -40,23 +40,9 @@ func checkNativeTransferAuthority(t *testing.T) {
 		if err != nil {
 			return nil, err
 		}
-		renew := func(ctx context.Context) error {
-			return f.c.store.renewClusterSSHPreparationTarget(ctx, claim.Lease, claim.Sealed)
-		}
-		for label, fn := range map[string]func(context.Context) error{"authority read": func(ctx context.Context) error { _, e := read(ctx); return e }, "target renewal": renew, "paired verification": pair} {
-			began := time.Now()
-			for range 6 {
-				if err := fn(ctx); err != nil {
-					return nil, err
-				}
-			}
-			t.Logf("%s: %s per call", label, time.Since(began)/6)
-		}
-		proof := newClusterSSHPreparationLeaseProof(read)
-		lease := func(ctx context.Context) error { return proof(ctx, renew) }
 		acquire := func(ctx context.Context, consume clusterSSHPrejoinWorkerSourceConsumer) error {
 			ok := func(context.Context) error { return nil }
-			checks := clusterSSHPreparationChecks{bindPairedRenewal: bindClusterSSHPreparationRenewal(ctx, proof), Authority: clusterSSHPreparationBoundary(ctx, lease, ok), Inputs: ok, Storage: func(context.Context) (clusterSSHStorageSnapshot, error) { return clusterSSHStorageSnapshot{}, nil }, K3sJoin: func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error { return nil }}
+			checks := clusterSSHPreparationChecks{Authority: pair, Inputs: ok, Storage: func(context.Context) (clusterSSHStorageSnapshot, error) { return clusterSSHStorageSnapshot{}, nil }, K3sJoin: func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error { return nil }}
 			return consume(ctx, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{}, clusterbootstrap.PostgresImageRepository+"@sha256:"+a.PayloadSHA256, sshPrejoinWorkerCapacityFixture(), expected, checks)
 		}
 		storage := func(context.Context, string, clusterbootstrap.PreparationExpected, clusterSSHPreparedImageCapacity, clusterSSHPreparationChecks) error {
@@ -131,22 +117,29 @@ func exerciseNativeAuthorityTransfer(parent context.Context, expected clusterboo
 	}
 	defer fromPeer.Close()
 	defer output.Close()
+	rawIn, rawOut, err := os.Pipe()
+	if err != nil {
+		return err
+	}
+	defer rawIn.Close()
+	defer rawOut.Close()
 	const size = 4 << 20
 	done := make(chan error, 1)
 	go func() {
-		err := clusterbootstrap.ServePreparationSessionWithProgress(ctx, input, output, request.Session.Nonce,
+		err := clusterbootstrap.ServeSSHPreparation(ctx, input, output, request.Session.Nonce, false,
+			func(context.Context, string) (io.ReadCloser, error) { return rawIn, nil },
 			func(_ context.Context, r clusterbootstrap.PreparationSessionRequest) error {
 				if r.Session.Nonce != request.Session.Nonce {
 					return clusterbootstrap.ErrSessionProtocol
 				}
 				return nil
 			},
-			func(_ context.Context, _ clusterbootstrap.PreparationSessionRequest, r io.Reader) (clusterbootstrap.PreparationProgress, error) {
+			func(_ context.Context, _ clusterbootstrap.PreparationSessionRequest, r io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
 				n, err := io.Copy(io.Discard, r)
 				if err == nil && n != size {
 					err = io.ErrUnexpectedEOF
 				}
-				return clusterbootstrap.PreparationProgress{Step: "empty"}, err
+				return clusterbootstrap.PreparationSessionResult{Progress: clusterbootstrap.PreparationProgress{Step: "empty"}}, err
 			}, func(time.Time) error { return nil })
 		output.Close()
 		input.Close()
@@ -186,7 +179,11 @@ func exerciseNativeAuthorityTransfer(parent context.Context, expected clusterboo
 			}
 		}
 	}
-	progress, err := clusterbootstrap.ExchangePreparationProgressSession(ctx, fromPeer, toPeer, request, produce, refresh)
+	var progress clusterbootstrap.PreparationProgress
+	err = clusterbootstrap.ExchangeSSHPreparation(ctx, fromPeer, toPeer, request, func(ctx context.Context) (clusterbootstrap.PreparationStreamReceipt, error) {
+		defer rawOut.Close()
+		return clusterbootstrap.StreamPreparation(ctx, rawOut, produce)
+	}, refresh, &progress, nil)
 	toPeer.Close()
 	fromPeer.Close()
 	cancel()

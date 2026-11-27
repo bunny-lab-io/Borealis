@@ -108,6 +108,10 @@ func parseClusterSSHPreparationAuthorizationContent(raw, qualificationRaw, confi
 		}
 	}
 	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization, proof.Source)
+	var receipt clusterSSHPreparationReadinessReceipt
+	if json.Unmarshal(readinessRaw, &receipt) != nil || (qualification.Version == 2) != (receipt.Version == 5) || qualification.Version == 2 && !checkedPairReadiness(readinessRaw, authorization, qualification) {
+		return fail()
+	}
 	if err != nil || confirmation.ConfirmedAt < qualification.ObservedAt || parseClusterSSHPreparationReadiness(readinessRaw, authorization) != nil {
 		return fail()
 	}
@@ -244,6 +248,14 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
 		clusterSSHPreparationOperationStep, operation.Attempt, work.Payload, len(targets)).Scan(&present) != nil {
 		return fail()
 	}
+	offset := pairRecoveryOffset(work.Payload)
+	step := "qualification_complete"
+	if offset == 1 {
+		if !fenced || qualification.Version != 2 {
+			return fail()
+		}
+		step = "pair_reconcile"
+	}
 	claims := make(map[string]clusterSSHNetworkTargetClaim, len(targets))
 	for _, target := range targets {
 		claim := clusterSSHNetworkTargetClaim{Lease: anchor, Sealed: sealed[target.Binding.TargetID]}
@@ -255,14 +267,14 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
  WHERE t.id=$1 AND t.operation_id=$4 AND t.cluster_id=$5 AND t.operation_attempt=$6
  AND t.management_ip=$7 AND t.ssh_port=$8 AND t.host_key_algorithm=$9 AND t.host_key_fingerprint=$10 AND t.host_key_base64=$11 AND t.ordinal=$12
  AND t.inspected_attempt=$6 AND t.inspected_generation=$13 AND t.inspected_at=$14 AND t.inspection_json=$15
- AND t.inspected_at>moment.now-$16 AND t.inspected_at<=moment.now AND t.credential_state='available'
- AND t.state='queued' AND t.current_step='qualification_complete' AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=$17
+ AND ($20 OR t.inspected_at>moment.now-$16) AND t.inspected_at<=moment.now AND t.credential_state='available'
+ AND t.state='queued' AND t.current_step=$21 AND t.lease_holder='' AND t.lease_expires_at=0 AND t.lease_generation=$17
  AND p.target_id=t.id AND p.expires_at>moment.now AND a.id=1 AND p.aegis_generation=a.verification_token
  AND p.aegis_generation=$18 AND p.ciphertext=$19
  RETURNING t.lease_generation`, target.Binding.TargetID, holder, clusterSSHTargetLeaseSeconds,
 			operation.ID, target.Binding.ClusterID, operation.Attempt, target.Binding.Address, target.Binding.Port, target.Key.Algorithm,
 			target.Key.Fingerprint, keys[target.Binding.TargetID], target.Ordinal, target.Generation, target.InspectedAt,
-			reports[target.Binding.TargetID], clusterSSHInspectionLifetimeSeconds, generations[target.Binding.TargetID], claim.Sealed.generation, claim.Sealed.ciphertext).
+			reports[target.Binding.TargetID], clusterSSHInspectionLifetimeSeconds, generations[target.Binding.TargetID]+offset, claim.Sealed.generation, claim.Sealed.ciphertext, offset == 1, step).
 			Scan(&claim.Lease.Generation) != nil {
 			return fail()
 		}
@@ -279,14 +291,14 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
 	if tx.QueryRowContext(ctx, `WITH moment AS MATERIALIZED(SELECT extract(epoch FROM clock_timestamp()) AS now)
  SELECT 1 FROM moment,engine.cluster_application_leases l,engine.aegis_cipher_state a
  WHERE l.name=$1 AND l.holder=$2 AND l.expires_at>moment.now AND a.id=1
- AND $3::bigint>moment.now-$4 AND $3::bigint<=moment.now
- AND $7::bigint>moment.now-$4 AND $7::bigint<=moment.now
+ AND ($9 OR $3::bigint>moment.now-$4) AND $3::bigint<=moment.now
+ AND ($9 OR $7::bigint>moment.now-$4) AND $7::bigint<=moment.now
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t
  LEFT JOIN engine.cluster_onboarding_credentials p ON p.target_id=t.id
  WHERE t.operation_id=$5 AND (t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$6
- AND t.lease_expires_at>moment.now AND t.inspected_at>moment.now-$8 AND t.inspected_at<=moment.now
+ AND t.lease_expires_at>moment.now AND ($9 OR t.inspected_at>moment.now-$8) AND t.inspected_at<=moment.now
  AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now) IS NOT TRUE)`, clusterControllerLeaseName,
-		controller, qualification.ObservedAt, clusterSSHFreshEvidenceSeconds, operation.ID, holder, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds).Scan(&present) != nil {
+		controller, qualification.ObservedAt, clusterSSHFreshEvidenceSeconds, operation.ID, holder, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds, offset == 1).Scan(&present) != nil {
 		return fail()
 	}
 	if tx.Commit() != nil {

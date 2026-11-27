@@ -48,6 +48,7 @@ type clusterSSHSourceNetworkRead func(context.Context, clusterSSHSourceMember) (
 // its controller transport supplies fresh InspectSourceNetwork receipts.
 // Current claims and bootstrap receiver still cannot enter a mutating phase.
 type clusterSSHPreparationSnapshot struct {
+	QualificationCPU   []clusterSSHPreparationTargetInstanceCPU `json:"qualification_cpu,omitempty"`
 	DesiredWorkerSites []int64                                  `json:"desired_worker_sites"`
 	Expected           clusterbootstrap.PreparationExpected     `json:"expected"`
 	Settings           map[string]string                        `json:"settings"`
@@ -171,7 +172,7 @@ func withClusterSSHPreparationSource(parent context.Context, scratchParent strin
 	if err != nil {
 		return err
 	}
-	return withClusterSSHPreparationSourceFor(parent, scratchParent, store, aegis, lease, baseline, sealed, false, consume, nil, client)
+	return withClusterSSHPreparationSourceFor(parent, scratchParent, store, aegis, lease, baseline, sealed, false, consume, nil, client, nil)
 }
 
 // Derive the outer allowance from the existing native session budget and source
@@ -183,9 +184,20 @@ func clusterSSHPreparationSourceBudget(joining bool) time.Duration {
 // Separate explicit joining scope permits approved drained registrations while
 // retaining original source/configuration/storage proof. Startup and image
 // verification remain native journal phases with independently proven prefixes.
+type clusterSSHSharedArtifactsKey struct{}
+type clusterSSHSharedArtifacts struct {
+	source        clusterbootstrap.Expected
+	postgres      string
+	artifacts     *clusterbootstrap.PreparationArtifacts
+	postgresImage *clusterbootstrap.PostgresImage
+	inventory     clusterSSHImageInventory
+	external      clusterSSHExternalInventory
+	k3s           clusterSSHK3sInventory
+}
+
 func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent string, store *postgresOperatorStore, aegis *goAegisService,
 	lease clusterSSHTargetLease, baseline clusterbootstrap.Expected, sealed sealedClusterSSHCredentials, joining bool,
-	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error, allocate func(context.Context) (string, error), client *clusterSSHSourceBrokerClient) error {
+	consume func(context.Context, *clusterbootstrap.PreparationInputs, *clusterbootstrap.PreparationArtifacts, string, clusterSSHPreparedImageCapacity, clusterbootstrap.PreparationExpected, clusterSSHPreparationChecks) error, allocate func(context.Context) (string, error), client *clusterSSHSourceBrokerClient, owner func(context.Context) error) error {
 	if store == nil || store.db == nil || aegis == nil || consume == nil || !validClusterSSHPreparationLease(lease) {
 		return clusterbootstrap.ErrPreparationConfig
 	}
@@ -193,13 +205,16 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	authority := newClusterSSHPreparationAuthorityRead(store, aegis, lease, baseline, sealed)
-	leaseProof := newClusterSSHPreparationLeaseProof(authority)
-	renew := func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) }
-	leaseCheck := func(ctx context.Context) error { return leaseProof(ctx, renew) }
-	// Retain the existing twenty-minute source-acquisition allowance around
-	// the exact bounded session budget, including identity activation.
+	leaseCheck := owner
+	if joining {
+		if owner == nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+	} else {
+		leaseCheck = newClusterSSHPreparationLeaseCheck(authority, func(ctx context.Context) error { return store.renewClusterSSHPreparationTarget(ctx, lease, sealed) })
+	}
 	maximum := clusterSSHPreparationSourceBudget(joining)
-	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, leaseCheck, func(ctx context.Context) (result error) {
+	acquire := func(ctx context.Context) (result error) {
 		var phase, last string
 		var finalSnapshotPassed bool
 		var began time.Time
@@ -277,7 +292,11 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			Authority: clusterSSHPreparationBoundary(ctx, leaseCheck, func(context.Context) error { return nil }),
 		}
 		if joining {
-			checks.bindPairedRenewal = bindClusterSSHPreparationRenewal(ctx, leaseProof)
+			// This source was acquired for an immutable plan. File readers verify
+			// what they consume. Source/credential custody is checked on secret
+			// export and at each native action dispatch.
+			checks.Authority = clusterbootstrap.CheckPreparationDeadline
+			checks.Inputs = owner
 		}
 		// The first full snapshot bound the source, settings and storage. Hashing
 		// private release files cannot change a host. Keep claim/credential
@@ -322,67 +341,88 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			return clusterbootstrap.ErrK3sJoinMaterial
 		}
 		checks.K3sJoin = newClusterSSHPreparationJoinRead(ctx, joinClient, expected, initial.Sources, lease, baseline, sealed, authority, checks.Authority)
-		mark("application_inventory")
-		inventory, err := resolveClusterSSHImageInventory(ctx, expected.Source)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "application inventory")
-			return err
+		// The outer target owns the staged release through both native joins.
+		// Only immutable public archives are shared. Credentials, identities,
+		// configuration and measured filesystem budgets remain target-specific.
+		shared, _ := ctx.Value(clusterSSHSharedArtifactsKey{}).(*clusterSSHSharedArtifacts)
+		var artifacts *clusterbootstrap.PreparationArtifacts
+		var inventory clusterSSHImageInventory
+		var externalInventory clusterSSHExternalInventory
+		var k3s clusterSSHK3sInventory
+		var postgresImage *clusterbootstrap.PostgresImage
+		if shared != nil && shared.artifacts != nil {
+			if shared.source != expected.Source || shared.postgres != initial.Storage.Requirements.PostgresImage.Resolved || owner(ctx) != nil {
+				return clusterbootstrap.ErrPreparationConfig
+			}
+			inventory, externalInventory, k3s = shared.inventory, shared.external, shared.k3s
+			postgresImage, artifacts = shared.postgresImage, shared.artifacts
+		} else {
+			mark("application_inventory")
+			inventory, err = resolveClusterSSHImageInventory(ctx, expected.Source)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "application inventory")
+				return err
+			}
+			mark("application_archives")
+			images, err := inventory.stage(ctx, scratchParent, checkBytes)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "application image staging")
+				return err
+			}
+			defer cleanup("images", images.Close, clusterbootstrap.ErrImageArchive)
+			mark("external_inventory")
+			externalInventory, err = resolveClusterSSHExternalInventory(ctx, expected.Source)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "external inventory")
+				return err
+			}
+			mark("external_archives")
+			externalImages, err := externalInventory.stage(ctx, scratchParent, checkBytes)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "external image staging")
+				return err
+			}
+			defer cleanup("externalImages", externalImages.Close, clusterbootstrap.ErrImageArchive)
+			mark("postgres_acquisition")
+			postgresImage, err = clusterbootstrap.AcquirePostgresImage(ctx, scratchParent, initial.Storage.Requirements.PostgresImage.Resolved, checkBytes)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "PostgreSQL image acquisition")
+				return err
+			}
+			defer cleanup("postgresImage", postgresImage.Close, clusterbootstrap.ErrImageArchive)
+			// Static publications may have changed during dynamic acquisition.
+			mark("publication_recheck")
+			if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checkBytes(ctx) != nil {
+				reportClusterSSHPrejoinCheck(ctx, "publication recheck")
+				return clusterbootstrap.ErrImageArchive
+			}
+			// Compose target demands separately from physically reserved PostgreSQL
+			// acquisition scratch. Complete K3s assets remain owned through consumption.
+			mark("k3s_inventory")
+			k3s, err = resolveClusterSSHK3sInventory(ctx, expected.Source, expected.K3sVersion)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "K3s inventory")
+				return err
+			}
+			mark("k3s_archives")
+			k3sInputs, err := k3s.stage(ctx, scratchParent, checkBytes)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "K3s staging")
+				return err
+			}
+			defer cleanup("k3sInputs", k3sInputs.Close, clusterbootstrap.ErrImageArchive)
+			mark("artifact_binding")
+			artifacts, err = clusterbootstrap.NewPreparationArtifacts(ctx, expected.Source, expected.K3sVersion, initial.Storage.Requirements.PostgresImage.Resolved, images, k3sInputs, externalImages, postgresImage, checkBytes)
+			if err != nil {
+				reportClusterSSHPrejoinCheck(ctx, "artifact set binding")
+				return err
+			}
+			defer cleanup("artifacts", artifacts.Close, clusterbootstrap.ErrImageArchive)
+			if shared != nil {
+				*shared = clusterSSHSharedArtifacts{expected.Source, initial.Storage.Requirements.PostgresImage.Resolved, artifacts, postgresImage, inventory, externalInventory, k3s}
+				defer func() { *shared = clusterSSHSharedArtifacts{} }()
+			}
 		}
-		mark("application_archives")
-		images, err := inventory.stage(ctx, scratchParent, checkBytes)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "application image staging")
-			return err
-		}
-		defer cleanup("images", images.Close, clusterbootstrap.ErrImageArchive)
-		mark("external_inventory")
-		externalInventory, err := resolveClusterSSHExternalInventory(ctx, expected.Source)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "external inventory")
-			return err
-		}
-		mark("external_archives")
-		externalImages, err := externalInventory.stage(ctx, scratchParent, checkBytes)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "external image staging")
-			return err
-		}
-		defer cleanup("externalImages", externalImages.Close, clusterbootstrap.ErrImageArchive)
-		mark("postgres_acquisition")
-		postgresImage, err := clusterbootstrap.AcquirePostgresImage(ctx, scratchParent, initial.Storage.Requirements.PostgresImage.Resolved, checkBytes)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "PostgreSQL image acquisition")
-			return err
-		}
-		defer cleanup("postgresImage", postgresImage.Close, clusterbootstrap.ErrImageArchive)
-		// Static publications may have changed during dynamic acquisition.
-		mark("publication_recheck")
-		if inventory.refresh(ctx) != nil || externalInventory.refresh(ctx) != nil || checkBytes(ctx) != nil {
-			reportClusterSSHPrejoinCheck(ctx, "publication recheck")
-			return clusterbootstrap.ErrImageArchive
-		}
-		// Compose target demands separately from physically reserved PostgreSQL
-		// acquisition scratch. Complete K3s assets remain owned through consumption.
-		mark("k3s_inventory")
-		k3s, err := resolveClusterSSHK3sInventory(ctx, expected.Source, expected.K3sVersion)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "K3s inventory")
-			return err
-		}
-		mark("k3s_archives")
-		k3sInputs, err := k3s.stage(ctx, scratchParent, checkBytes)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "K3s staging")
-			return err
-		}
-		defer cleanup("k3sInputs", k3sInputs.Close, clusterbootstrap.ErrImageArchive)
-		mark("artifact_binding")
-		artifacts, err := clusterbootstrap.NewPreparationArtifacts(ctx, expected.Source, expected.K3sVersion, initial.Storage.Requirements.PostgresImage.Resolved, images, k3sInputs, externalImages, postgresImage, checkBytes)
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "artifact set binding")
-			return err
-		}
-		defer cleanup("artifacts", artifacts.Close, clusterbootstrap.ErrImageArchive)
 		mark("filesystem_demands")
 		appDemand, err := inventory.demands()
 		if err != nil {
@@ -445,6 +485,9 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 				if err := consume(ctx, inputs, artifacts, initial.Storage.Requirements.PostgresImage.Resolved, capacity, expected, checks); err != nil {
 					return err
 				}
+				if joining {
+					return nil
+				}
 				mark("post_dispatch_recheck")
 				fresh, err := inputs.StorageDemand(ctx, expected, checkBytes)
 				if err != nil || fresh != bundleDemand {
@@ -458,6 +501,13 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 			}); err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "PostgreSQL capacity or source consumer")
 			return err
+		}
+		if joining {
+			finalSnapshotPassed = owner(ctx) == nil
+			if !finalSnapshotPassed {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			return nil
 		}
 		mark("publication_cleanup")
 		if err := k3s.refresh(ctx); err != nil {
@@ -478,7 +528,13 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		err = checks.Inputs(ctx)
 		finalSnapshotPassed = err == nil
 		return err
-	})
+	}
+	if joining {
+		ctx, cancel := context.WithTimeout(parent, maximum)
+		defer cancel()
+		return acquire(ctx)
+	}
+	return runClusterSSHPreparationScopeFor(parent, 5*time.Second, maximum, leaseCheck, acquire)
 }
 
 // Separate bounded private GET path: ordinary Kubernetes errors can retain

@@ -45,7 +45,7 @@ func (a *PreparationArtifacts) publicationPlan(ctx context.Context, check func(c
 	defer a.external.mu.Unlock()
 	a.postgres.set.mu.Lock()
 	defer a.postgres.set.mu.Unlock()
-	if a.application.root == nil || a.application.inventory == nil || a.k3s.root == nil || a.k3s.inventory == nil || a.external.root == nil || a.external.inventory == nil || a.postgres.set.root == nil || a.postgres.set.inventory == nil {
+	if (!a.published && (a.application.root == nil || a.k3s.root == nil || a.external.root == nil || a.postgres.set.root == nil)) || a.application.inventory == nil || a.k3s.inventory == nil || a.external.inventory == nil || a.postgres.set.inventory == nil {
 		return invalid, ErrImageArchive
 	}
 	plan := prejoinArtifactPlan{}

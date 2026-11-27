@@ -119,7 +119,7 @@ func withClusterSSHPrejoinCompletionDispatch(parent context.Context, store *post
 	}
 	err := withClusterSSHPrejoinNativeScope(parent, store, aegis, source, claim, baseline, inputs, artifacts, postgresReference, expected, preparation, joinRead, startup,
 		func(ctx context.Context, target clusterSSHPrejoinNativeTarget) error {
-			return target.run(ctx, false, -1, nil, nil, output)
+			return target.run(ctx, installAllSteps, output)
 		})
 	if err == nil && completion != nil {
 		*completion = proved
@@ -131,10 +131,7 @@ func withClusterSSHPrejoinCompletionDispatch(parent context.Context, store *post
 // source-identity scope remains live across a cohort barrier and its mutation.
 type clusterSSHPrejoinNativeTarget struct {
 	current func(context.Context) error
-	// Full source snapshots may launch bounded Jobs. The cohort invokes this
-	// only between native sessions, never from a short transport challenge.
-	inputs func(context.Context) error
-	run    func(context.Context, bool, int, func(context.Context) error, func(context.Context) error, *clusterbootstrap.PrejoinPreparationReceipt) error
+	run     func(context.Context, clusterSSHInstallPhase, *clusterbootstrap.PrejoinPreparationReceipt) error
 }
 
 func (s *postgresOperatorStore) recordSSHPreparationCheckpoint(ctx context.Context, lease clusterSSHTargetLease, line string) error {
@@ -244,12 +241,16 @@ func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOpe
 			if err != nil {
 				return clusterbootstrap.ErrSessionAuthority
 			}
-			check := func(ctx context.Context) error {
+			actionBoundary := func(ctx context.Context) error {
 				current, err := readKey(ctx)
 				if err != nil || current.Algorithm != key.Algorithm || current.Fingerprint != key.Fingerprint || !bytes.Equal(current.PublicKey, key.PublicKey) || ctx.Err() != nil {
 					return clusterbootstrap.ErrSessionAuthority
 				}
 				return nil
+			}
+			check := actionBoundary
+			if _, bounded := clusterbootstrap.PreparationTimeRemaining(ctx); bounded {
+				check = clusterbootstrap.CheckPreparationDeadline
 			}
 			if inputs.Verify(ctx, expected, check) != nil {
 				return clusterbootstrap.ErrSessionAuthority
@@ -266,6 +267,9 @@ func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOpe
 			defer credential.Destroy()
 			defer clear(sudo)
 			connect := func(ctx context.Context) (clusterSSHPrejoinClient, error) {
+				if actionBoundary(ctx) != nil {
+					return nil, clusterbootstrap.ErrSessionAuthority
+				}
 				client, err := (clusterremote.Transport{}).Connect(ctx,
 					clusterremote.Target{Address: expected.Target.Address, Port: expected.Target.Port}, key, credential)
 				if client == nil {
@@ -276,22 +280,10 @@ func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOpe
 			runCtx, cancelRuns := context.WithCancel(ctx)
 			lifetime := &clusterSSHNetworkReaderLifetime{ctx: runCtx, cancel: cancelRuns}
 			defer lifetime.close()
-			target := clusterSSHPrejoinNativeTarget{current: check}
-			target.run = func(caller context.Context, prepareOnly bool, proofStep int, beforeStart, cohortCurrent func(context.Context) error, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
+			target := clusterSSHPrejoinNativeTarget{current: actionBoundary}
+			target.run = func(caller context.Context, phase clusterSSHInstallPhase, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
 				return lifetime.run(caller, func(bound context.Context) error {
-					current := check
-					if cohortCurrent != nil {
-						current = func(ctx context.Context) error {
-							if check(ctx) != nil || cohortCurrent(ctx) != nil || check(ctx) != nil {
-								return clusterbootstrap.ErrSessionAuthority
-							}
-							return nil
-						}
-					}
-					if current(bound) != nil {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					return dispatchClusterSSHPrejoinPhase(bound, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, current, joinRead, startup, completion, prepareOnly, proofStep, beforeStart)
+					return dispatchClusterSSHPrejoinPhase(bound, connect, inputs, artifacts, postgresReference, expected, source.Binding, material, sudo, check, joinRead, startup, completion, phase)
 				})
 			}
 			consumeErr := consume(runCtx, target)
@@ -342,17 +334,17 @@ func dispatchClusterSSHPrejoinCompletion(parent context.Context, connect func(co
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
 	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error,
 	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error, startup bool, completion *clusterbootstrap.PrejoinPreparationReceipt) (result error) {
-	return dispatchClusterSSHPrejoinPhase(parent, connect, inputs, artifacts, postgresReference, expected, source, material, sudoPassword, current, joinRead, startup, completion, false, -1, nil)
+	return dispatchClusterSSHPrejoinPhase(parent, connect, inputs, artifacts, postgresReference, expected, source, material, sudoPassword, current, joinRead, startup, completion, installAllSteps)
 }
 
 func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context.Context) (clusterSSHPrejoinClient, error),
 	inputs *clusterbootstrap.PreparationInputs, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string, expected clusterbootstrap.PreparationExpected, source engineidentity.Binding,
 	material *engineidentity.Material, sudoPassword []byte, current func(context.Context) error,
 	joinRead func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error, startup bool, completion *clusterbootstrap.PrejoinPreparationReceipt,
-	prepareOnly bool, proofStep int, beforeStart func(context.Context) error) (result error) {
+	phase clusterSSHInstallPhase) (result error) {
 	fail := clusterbootstrap.ErrSessionAuthority
 	var receipt clusterbootstrap.PrejoinPreparationReceipt
-	if (prepareOnly || proofStep >= 0 || beforeStart != nil) && !startup || proofStep != -1 && proofStep != 7 && proofStep != 10 || prepareOnly && proofStep >= 0 {
+	if phase < installAllSteps || phase > finishJoinedServer || phase != installAllSteps && !startup {
 		return fail
 	}
 	if completion != nil && !startup {
@@ -577,14 +569,6 @@ func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context
 		}
 		return err, nil
 	}
-	// A barrier proof selects its exact native phase directly. No cursor,
-	// continuation, source-absence inference or write can authorize this path.
-	if proofStep >= 0 {
-		if err, boundaryErr := run(steps[proofStep][1]); err != nil || boundaryErr != nil || check(checkCtx) != nil {
-			return fail
-		}
-		return nil
-	}
 	// Inspection is a cursor, not completion proof. A failed query never becomes
 	// an empty journal. Reconcile exactly its retained stage in a new executor
 	// before any later write; actual source/account/key/host proof remains there.
@@ -730,30 +714,26 @@ func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context
 		}
 		retained = 10
 	}
-	if retained >= 0 {
-		if beforeStart != nil && retained > 7 {
-			// The cohort proved this target configured, not already started.
-			// A changed cursor cannot authorize image/activation continuation.
+	// A cursor selects a read-only reconciliation. Only that proof can skip
+	// an effect, including an interrupted start that may already have joined.
+	end := len(steps)
+	switch phase {
+	case prepareBeforeJoin:
+		end = 8
+	case joinDrainedServer:
+		if retained < 7 {
 			return fail
 		}
-		if prepareOnly && retained > 7 && retained != 10 {
-			return fail // Partial startup needs its separate recovery contract.
-		}
-		if proveStep(retained) != nil {
+		end = 9
+	case finishJoinedServer:
+		if retained < 8 {
 			return fail
 		}
 	}
-	end := len(steps)
-	if prepareOnly {
-		end = 8
+	if retained >= 0 && proveStep(retained) != nil {
+		return fail
 	}
 	for index := retained + 1; index < end; index++ {
-		if index == 8 && beforeStart != nil {
-			// No connection, native executor or target lock is active here.
-			if beforeStart(checkCtx) != nil || check(checkCtx) != nil {
-				return fail
-			}
-		}
 		step := steps[index]
 		if _, boundaryErr := run(step[0]); boundaryErr != nil {
 			return fail

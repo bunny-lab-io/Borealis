@@ -173,6 +173,20 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 		len(w.Authorization.Targets) != len(snapshot.credentials) || proof.recheck(ctx) != nil || !proof.valid(plan) {
 		return errClusterConflict
 	}
+	readiness := clusterSSHPreparationReadiness(plan, proof.receipts)
+	readiness.Version, readiness.Targets, readiness.Capacity, readiness.Packages = 4, proof.targetCPU, proof.capacity, proof.packages
+	if validateClusterSSHPreparationReadinessCPU(readiness, w.Authorization) != nil {
+		return errClusterConflict
+	}
+	return c.commitSSHInstallation(ctx, snapshot, confirmation, readiness, func() bool { return proof.valid(plan) })
+}
+
+func (c *clusterController) commitSSHInstallation(ctx context.Context, snapshot clusterSSHPreparationApprovalSnapshot, confirmation clusterSSHPreparationConfirmation, readiness clusterSSHPreparationReadinessReceipt, current func() bool) error {
+	w := snapshot.work
+	plan, err := clusterSSHPreparationPlanDigest(w.Authorization)
+	if err != nil || !confirmation.valid(w.Authorization, w.Proof.Source) || c.holder != w.Authorization.ControllerHolder || !current() {
+		return errClusterConflict
+	}
 	var payload map[string]json.RawMessage
 	if json.Unmarshal([]byte(w.Payload), &payload) != nil || payload["ssh_preparation_authorization"] != nil || payload["ssh_preparation_confirmation"] != nil {
 		return errClusterConflict
@@ -191,11 +205,6 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	}
 	payload["ssh_preparation_confirmation"], err = json.Marshal(confirmation)
 	if err != nil {
-		return errClusterConflict
-	}
-	readiness := clusterSSHPreparationReadiness(plan, proof.receipts)
-	readiness.Version, readiness.Targets, readiness.Capacity, readiness.Packages = 4, proof.targetCPU, proof.capacity, proof.packages
-	if validateClusterSSHPreparationReadinessCPU(readiness, w.Authorization) != nil {
 		return errClusterConflict
 	}
 	payload["ssh_preparation_readiness"], err = json.Marshal(readiness)
@@ -225,7 +234,7 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
 	var now int64
 	// All expiry checks use one fresh database clock after every row-lock wait.
 	if tx.QueryRowContext(ctx, `WITH moment AS MATERIALIZED(SELECT extract(epoch FROM clock_timestamp()) AS now)
- UPDATE engine.cluster_operations o SET state='running',current_step=$2,payload_json=$3,updated_at=floor(moment.now)
+ UPDATE engine.cluster_operations o SET state='running',current_step=$2,payload_json=$3,updated_at=floor(moment.now),error_text=CASE WHEN $14 THEN NULL ELSE error_text END
  FROM moment,engine.cluster_state c,engine.cluster_application_leases l
  WHERE o.id=$1 AND o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step=$4 AND o.attempt=$5 AND o.payload_json=$6
  AND c.id=1 AND c.active_operation_id=o.id AND l.name=$7 AND l.holder=$8 AND l.expires_at>moment.now
@@ -235,7 +244,7 @@ func (c *clusterController) commitClusterSSHPreparationApproval(ctx context.Cont
  WHERE t.operation_id=o.id AND (t.inspected_at>moment.now-$13 AND t.inspected_at<=moment.now AND p.expires_at>moment.now) IS NOT TRUE)
  RETURNING floor(moment.now)::bigint`, w.Authorization.OperationID, clusterSSHPreparationOperationStep, string(updated), clusterSSHQualificationStep,
 		w.Authorization.Attempt, w.Payload, clusterControllerLeaseName, c.holder, qualification.ObservedAt, confirmation.ConfirmedAt,
-		clusterSSHFreshEvidenceSeconds, len(w.Proof.Cohort.Targets), clusterSSHInspectionLifetimeSeconds).Scan(&now) != nil || !proof.valid(plan) || ctx.Err() != nil {
+		clusterSSHFreshEvidenceSeconds, len(w.Proof.Cohort.Targets), clusterSSHInspectionLifetimeSeconds, readiness.Version == 5).Scan(&now) != nil || !current() || ctx.Err() != nil {
 		return errClusterConflict
 	}
 	if insertClusterEvent(ctx, tx, w.Authorization.OperationID, "", w.Source.ClusterID, "ssh_preparation_approved", "running",

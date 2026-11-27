@@ -1,12 +1,13 @@
 package clusterbootstrap
 
 import (
+	"borealis/api-backend/internal/testsshpipe"
 	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"io"
-	"net"
+
 	"os"
 	"path/filepath"
 	"strings"
@@ -248,7 +249,7 @@ func verifyPreparationProgressToSourceInstallation(t *testing.T, inputs *Prepara
 			t.Fatal(err)
 		}
 		scratch := mutationTempDir(t)
-		client, target := net.Pipe()
+		client, target := testsshpipe.Pipe()
 		done := make(chan error, 1)
 		duringTransfer := make(chan struct{})
 		var producing atomic.Bool

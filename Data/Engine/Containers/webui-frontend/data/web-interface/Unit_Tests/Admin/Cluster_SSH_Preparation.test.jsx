@@ -19,6 +19,14 @@ function fixture(count = 2) {
     targets: Array.from({ length: count }, (_, index) => ({ id: `${index + 5}5555555-5555-4555-8555-555555555555`, address: `192.168.90.${21 + index}`, port: 22,
       host_key_fingerprint: `SHA256:${String(index + 1).repeat(43)}`, state: "queued", current_step: "qualification_complete", credentials_available: true,
       inspected_at: now, inspected_attempt: 2, inspected_generation: 3, report: { hostname: `engine-${index + 2}`, cpu_count: 4, memory_kib: 8388608 } })) };
+  if (count === 2) {
+    progress.qualification.version = 2;
+    progress.qualification.ready = true;
+    progress.qualification.checks = ["source_inputs", "host_profile", "replica_capacity", "cluster_connectivity", "installation_inputs"]
+      .map((code) => ({ code, state: "passed" }));
+    progress.qualification.storage = progress.targets.map((target) => ({ target_id: target.id, storage_path: "/var/lib/longhorn", fits: true,
+      budgets: [{ filesystem: "0000000000000001", available_bytes: 100, other_bytes: 24, replica_bytes: 10, rebuild_bytes: 10, minimum_free_bytes: 5, logical_limit_bytes: 50, fits: true }] }));
+  }
   const plan = { operation_id: operationID, attempt: 2, plan_sha256: "a".repeat(64), baseline_release: "2026.9.5.1", source_sha: "b".repeat(40),
     targets: progress.targets.map((target) => ({ target_id: target.id, address: target.address, port: target.port, hostname: target.report.hostname, host_key_fingerprint: target.host_key_fingerprint })),
     identity_sources: count === 2 ? [{ source_id: sourceID, hostname: "engine-1" }] : [{ source_id: sourceID, hostname: "engine-1" }, { source_id: secondSourceID, hostname: "engine-3" }],

@@ -11,7 +11,7 @@ func (p *PreparationInputs) WritePrejoinK3sJoinPreparation(ctx context.Context, 
 	if join.Verify(ctx, expected, source, check) != nil || out == nil {
 		return ErrK3sJoinMaterial
 	}
-	if p.WritePrejoinArtifactPreparation(ctx, expected, source, identity, artifacts, postgresReference, out, check) != nil || join.WriteJoinMaterial(ctx, expected, source, out, check) != nil {
+	if artifacts == nil || artifacts.expected != expected.Source || artifacts.k3sVersion != expected.K3sVersion || artifacts.postgresReference != postgresReference || p.WritePrejoinPreparation(ctx, expected, source, identity, out, check) != nil || artifacts.writePublishedInventories(ctx, out, check) != nil || join.WriteJoinMaterial(ctx, expected, source, out, check) != nil {
 		return ErrK3sJoinMaterial
 	}
 	return imageBoundary(ctx, check)
@@ -21,7 +21,7 @@ func ConsumePrejoinK3sJoinPreparation(ctx context.Context, parent string, expect
 	postgresReference string, input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material, *PreparationArtifacts, *K3sJoinMaterial) error) error {
 	return consumePrejoinK3sJoinPreparation(ctx, parent, expected, manager, source, postgresReference, input, check, consume,
 		func(ctx context.Context, input io.Reader) (*PreparationArtifacts, error) {
-			return ReceivePreparationArtifacts(ctx, parent, expected.Source, expected.K3sVersion, postgresReference, input, check)
+			return readPublishedInventories(ctx, expected.Source, expected.K3sVersion, postgresReference, input, check, K3sPins(), ExternalImagePins())
 		})
 }
 

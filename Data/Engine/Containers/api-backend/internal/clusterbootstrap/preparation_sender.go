@@ -2,7 +2,7 @@ package clusterbootstrap
 
 import (
 	"context"
-	"encoding/base64"
+
 	"io"
 	"log"
 	"time"
@@ -11,51 +11,12 @@ import (
 // PreparationProofTimeout bounds a single live controller/target proof.
 const PreparationProofTimeout = 3 * time.Second
 
-// ExchangePreparationSession transfers private inputs only after native target
-// verification. Transport owns approved-key pinning and executor supervision.
-// Producer and refresh must honor cancellation; both finish before return.
-func ExchangePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
-	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error) error {
-	if request.Action == "inspect_preparation_progress" {
+// ExchangeSSHPreparation supervises one pinned SSH upload and its terminal receipt.
+func ExchangeSSHPreparation(parent context.Context, input io.ReadCloser, output io.WriteCloser, request PreparationSessionRequest, upload PreparationStreamUpload, refresh func(context.Context) error, progress *PreparationProgress, completion *PrejoinPreparationReceipt) (resultErr error) {
+	request.SSHStream = true
+	if (request.Action == "inspect_preparation_progress") != (progress != nil) || (request.Action == "reconcile_prejoin_identity_activation") != (completion != nil) {
 		return ErrSessionProtocol
 	}
-	return exchangePreparationSession(parent, input, output, request, produce, refresh, nil)
-}
-
-// ExchangePreparationProgressSession returns a bound cursor only after complete
-// transfer, terminal frame/EOF and final authority proof. Caller still verifies
-// remote exit and runs separate domain reconciliation before advancing a stage.
-func ExchangePreparationProgressSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
-	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error) (PreparationProgress, error) {
-	var progress PreparationProgress
-	if request.Action != "inspect_preparation_progress" {
-		return progress, ErrSessionProtocol
-	}
-	if err := exchangePreparationSession(parent, input, output, request, produce, refresh, &progress); err != nil {
-		return PreparationProgress{}, err
-	}
-	return progress, nil
-}
-
-func exchangePreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser,
-	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress) error {
-	return exchangePreparationSessionResult(parent, input, output, request, produce, refresh, progress, nil)
-}
-
-func ExchangePrejoinPreparationSession(parent context.Context, input io.ReadCloser, output io.WriteCloser, request PreparationSessionRequest,
-	produce func(context.Context, io.Writer) error, refresh func(context.Context) error) (PrejoinPreparationReceipt, error) {
-	var result PrejoinPreparationReceipt
-	if request.Action != "reconcile_prejoin_identity_activation" {
-		return result, ErrSessionProtocol
-	}
-	if err := exchangePreparationSessionResult(parent, input, output, request, produce, refresh, nil, &result); err != nil {
-		return PrejoinPreparationReceipt{}, err
-	}
-	return result, nil
-}
-
-func exchangePreparationSessionResult(parent context.Context, input io.ReadCloser, output io.WriteCloser,
-	request PreparationSessionRequest, produce func(context.Context, io.Writer) error, refresh func(context.Context) error, progress *PreparationProgress, completion *PrejoinPreparationReceipt) (resultErr error) {
 	// Only locally chosen labels reach the source log. Frames, archive bytes,
 	// target stderr and credential material must stay inside the session.
 	stage := "validate_request"
@@ -72,7 +33,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 		request.IdentitySource = &source
 	}
 	digest, err := request.Digest()
-	if err != nil || input == nil || output == nil || produce == nil || refresh == nil {
+	if err != nil || input == nil || output == nil || refresh == nil || upload == nil {
 		return ErrSessionProtocol
 	}
 	profile := preparationProfile(bulkPreparationAction(request.Action))
@@ -158,105 +119,40 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 		}
 		<-readDone
 	}()
-	pipeReader, pipeWriter := io.Pipe()
-	defer pipeReader.Close()
-	defer pipeWriter.Close()
-	type chunkResult struct {
-		data []byte
-		err  error
+	type uploadResult struct {
+		receipt PreparationStreamReceipt
+		err     error
 	}
-	chunks := make(chan chunkResult)
+	var uploaded chan uploadResult
 	producerDone := make(chan struct{})
-	chunkDone := make(chan struct{})
-	started := false
+	started, sentEnd := false, false
 	defer func() {
 		cancel()
-		pipeReader.CloseWithError(ErrSessionAuthority)
-		pipeWriter.CloseWithError(ErrSessionAuthority)
 		if started {
 			<-producerDone
-			<-chunkDone
 		}
 	}()
-	start := func() {
-		started = true
-		go func() {
-			defer close(producerDone)
-			err := produce(ctx, pipeWriter)
-			if err != nil {
-				err = ErrSessionProtocol
-			}
-			pipeWriter.CloseWithError(err)
-		}()
-		go func() {
-			defer close(chunkDone)
-			for {
-				data := make([]byte, profile.chunk)
-				n, err := io.ReadFull(pipeReader, data)
-				if err == io.ErrUnexpectedEOF {
-					err = io.EOF
-				}
-				select {
-				case chunks <- chunkResult{data[:n], err}:
-				case <-ctx.Done():
-					clear(data)
-					return
-				}
-				if err != nil {
-					return
-				}
-			}
-		}()
-	}
 	stage = "target_verification"
-	var sequence, total int64
-	awaitingAck, sentEnd, eof := false, false, false
 	seenChallenges := make(map[string]bool)
 	deadline := time.NewTimer(SessionLeaseWindow)
 	defer deadline.Stop()
-	sendEnd := func() error {
-		if total == 0 {
-			return ErrSessionProtocol
-		}
-		stage = "terminal_receipt"
-		sentEnd = true
-		return WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "end", Nonce: request.Session.Nonce, RequestSHA256: digest, Sequence: sequence})
-	}
 	for {
-		var next <-chan chunkResult
-		if started && !awaitingAck && !sentEnd && !eof {
-			next = chunks
-		}
 		select {
 		case <-ctx.Done():
 			return ErrSessionAuthority
 		case <-deadline.C:
 			return ErrSessionAuthority
-		case chunk := <-next:
-			if chunk.err != nil && chunk.err != io.EOF {
-				clear(chunk.data)
+		case upload := <-uploaded:
+			if upload.err != nil || upload.receipt.Bytes < 1 || upload.receipt.Bytes > profile.bytes || !digestPattern.MatchString(upload.receipt.SHA256) {
 				return ErrSessionProtocol
 			}
-			eof = chunk.err == io.EOF
-			total += int64(len(chunk.data))
-			if total > profile.bytes {
-				clear(chunk.data)
+			uploaded = nil
+			sentEnd = true
+			if WriteSessionFrame(output, PreparationSessionFrame{Protocol: 1, State: "end", Nonce: request.Session.Nonce, RequestSHA256: digest, Bytes: upload.receipt.Bytes, StreamSHA256: upload.receipt.SHA256}) != nil {
 				return ErrSessionProtocol
-			}
-			if len(chunk.data) > 0 {
-				frame := PreparationSessionFrame{Protocol: 1, State: "chunk", Nonce: request.Session.Nonce, RequestSHA256: digest, Sequence: sequence, Data: base64.StdEncoding.EncodeToString(chunk.data)}
-				clear(chunk.data)
-				if writeSessionFrameBounded(output, frame, profile.frame) != nil {
-					return ErrSessionProtocol
-				}
-				awaitingAck = true
-			} else if eof {
-				if sendEnd() != nil {
-					return ErrSessionProtocol
-				}
 			}
 		case frame, ok := <-frames:
-			if !ok || frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.Data != "" || frame.State != "verified" && (frame.JournalStep != "" || frame.CompletionBase64 != "") {
+			if !ok || frame.Bytes != 0 || frame.StreamSHA256 != "" || frame.GrantMillis != 0 || frame.Protocol != 1 || frame.RequestSHA256 != digest || frame.Data != "" || frame.State != "verified" && (frame.JournalStep != "" || frame.CompletionBase64 != "") {
 				return ErrSessionProtocol
 			}
 			if frame.State == "challenge" {
@@ -280,6 +176,22 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 					return ErrSessionAuthority
 				}
 				frame.State = "heartbeat"
+				if request.SSHStream {
+					window := SessionLeaseWindow
+					if limit, ok := ctx.Deadline(); ok {
+						window = min(window, time.Until(limit))
+					}
+					frame.GrantMillis = window.Milliseconds()
+					if frame.GrantMillis < 1 {
+						return ErrSessionAuthority
+					}
+				}
+				if remaining, bounded := PreparationTimeRemaining(ctx); bounded {
+					frame.GrantMillis = min(remaining, SessionLeaseWindow).Milliseconds()
+					if frame.GrantMillis < 1 {
+						return ErrSessionAuthority
+					}
+				}
 				if WriteSessionFrame(output, frame) != nil {
 					return ErrSessionProtocol
 				}
@@ -295,16 +207,13 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 					return ErrSessionProtocol
 				}
 				stage = "input_transfer"
-				start()
-			case "ack":
-				if !awaitingAck || sentEnd || frame.Sequence != sequence {
-					return ErrSessionProtocol
-				}
-				awaitingAck = false
-				sequence++
-				if eof && sendEnd() != nil {
-					return ErrSessionProtocol
-				}
+				started = true
+				uploaded = make(chan uploadResult, 1)
+				go func(done chan<- uploadResult) {
+					defer close(producerDone)
+					r, err := upload(ctx)
+					done <- uploadResult{r, err}
+				}(uploaded)
 			case "verified":
 				var receipt PrejoinPreparationReceipt
 				if request.Action == "reconcile_prejoin_identity_activation" {
@@ -327,7 +236,7 @@ func exchangePreparationSessionResult(parent context.Context, input io.ReadClose
 				} else if frame.JournalStep != "" {
 					return ErrSessionProtocol
 				}
-				if !sentEnd || awaitingAck || frame.Sequence != sequence {
+				if !sentEnd || frame.Sequence != 0 {
 					return ErrSessionProtocol
 				}
 				close(finishRequest)

@@ -272,7 +272,7 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 			}
 			if fencedPreparation {
 				for _, target := range authorization.Targets {
-					if generations[target.TargetID] != target.QualificationGeneration+1 {
+					if generations[target.TargetID] != target.QualificationGeneration+1+pairRecoveryOffset(payload) {
 						return fail()
 					}
 				}

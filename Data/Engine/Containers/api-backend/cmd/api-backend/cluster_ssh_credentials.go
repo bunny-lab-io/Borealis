@@ -100,12 +100,17 @@ func (s *goAegisService) verifyClusterSSHGeneration(ctx context.Context, generat
 	if err != nil || !state.Configured || state.VerificationToken != generation {
 		return errClusterSSHCredentials
 	}
+	return s.verifyClusterSSHMemoryKey(ctx, generation)
+}
+
+// The paired ownership query already checks the persisted verification token.
+func (s *goAegisService) verifyClusterSSHMemoryKey(ctx context.Context, generation string) error {
 	key, err := s.activeKey()
 	if err != nil {
 		return errClusterSSHCredentials
 	}
 	defer clear(key)
-	value, err := aegisDecryptText(state.VerificationToken, key)
+	value, err := aegisDecryptText(generation, key)
 	if err != nil || value != aegisVerificationPlaintext || ctx.Err() != nil {
 		return errClusterSSHCredentials
 	}

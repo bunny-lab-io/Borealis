@@ -62,7 +62,7 @@ func (s *postgresOperatorStore) openSSHPreparationAllocation(ctx context.Context
 		return errClusterConflict
 	}
 	if err := tx.QueryRowContext(ctx, `SELECT encode(sha256(convert_to(payload_json,'UTF8')),'hex') FROM engine.cluster_operations WHERE id=$1 AND kind='ssh_onboarding' AND state='running'
- AND current_step='prepare_ssh_targets' AND attempt=$2 AND NOT(payload_json::jsonb ? 'ssh_preparation')
+ AND current_step='prepare_ssh_targets' AND attempt=$2 AND COALESCE(error_text,'')='' AND NOT(payload_json::jsonb ? 'ssh_preparation')
  AND payload_json::jsonb #>> '{ssh_preparation_authorization,controller_holder}'=$3 FOR UPDATE`,
 		first.OperationID, first.OperationAttempt, first.ControllerHolder).Scan(&payloadDigest); err != nil {
 		return errClusterConflict
@@ -89,7 +89,7 @@ func (s *postgresOperatorStore) openSSHPreparationAllocation(ctx context.Context
  (SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=$1)=$2
  AND (SELECT count(*) FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$3 AND details_json::jsonb->>'attempt'=$4
  AND details_json::jsonb->>'worker_sha256'=$5 AND details_json::jsonb->>'payload_sha256'=$7)=1
- AND NOT EXISTS(SELECT 1 FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$6)`,
+ AND NOT EXISTS(SELECT 1 FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$6 AND details_json::jsonb->>'worker_sha256'=$5)`,
 		first.OperationID, len(claims), sshPreparationReadOnlyClaim, strconv.FormatInt(first.OperationAttempt, 10), sshPreparationFenceDigest(first.Holder), sshPreparationAllocated, payloadDigest).Scan(&one); err != nil {
 		return errClusterConflict
 	}
@@ -216,7 +216,11 @@ func (c *clusterController) settleInterruptedSSHInventory(ctx context.Context, o
 		op.ID, sshPreparationAllocated, sshPreparationReturned, strconv.FormatInt(op.Attempt, 10), claimDigest).Scan(&allocated, &returned); err != nil {
 		return err
 	}
-	safe := validClusterSSHPreparationDigest(claimDigest) && (!allocated || returned)
+	offset := pairRecoveryOffset(payload)
+	report, pairErr := pairReport(payload)
+	pair := pairErr == nil && report.Ready
+	safe := offset == 0 && validClusterSSHPreparationDigest(claimDigest) && (!allocated || returned)
+	credentialsCurrent := true
 	block := sshPreparationInspect
 	// Credential cleanup locks credential rows before changing target rows.
 	if _, err := tx.ExecContext(ctx, `SELECT p.target_id FROM engine.cluster_onboarding_credentials p JOIN engine.cluster_onboarding_targets t ON t.id=p.target_id
@@ -238,12 +242,13 @@ func (c *clusterController) settleInterruptedSSHInventory(ctx context.Context, o
 		}
 		switch access {
 		case "available":
-			if holder == "" || generation != target.QualificationGeneration+1 {
+			if holder == "" || generation != target.QualificationGeneration+1+offset {
 				return errClusterConflict
 			}
 			safe = safe && sshPreparationFenceDigest(holder) == claimDigest
 		case "required":
-			if holder != "" || generation != target.QualificationGeneration+2 {
+			credentialsCurrent = false
+			if holder != "" || generation != target.QualificationGeneration+2+offset {
 				return errClusterConflict
 			}
 			block = sshPreparationAccess
@@ -283,7 +288,28 @@ func (c *clusterController) settleInterruptedSSHInventory(ctx context.Context, o
 		if err = insertClusterAudit(ctx, tx, c.holder, "ssh_preparation_inventory_failed", op.ID, "failed", map[string]any{"attempt": op.Attempt}, now); err != nil {
 			return err
 		}
-	} else if reason != block {
+	} else if pair && offset == 0 && allocated && credentialsCurrent && original.Approval.ControllerHolder == c.holder && reason == "" && validClusterSSHPreparationDigest(claimDigest) {
+		// An expired lease never proves absence. Reissue only the identical
+		// plan, with a higher fence; native progress and membership decide
+		// which effects may proceed. A second interruption remains reserved.
+		result, err := tx.ExecContext(ctx, `UPDATE engine.cluster_onboarding_targets t SET state='queued',current_step='pair_reconcile',lease_holder='',lease_expires_at=0,updated_at=$2
+        FROM engine.cluster_onboarding_credentials p,engine.aegis_cipher_state a
+        WHERE t.operation_id=$1 AND t.state='running' AND p.target_id=t.id AND a.id=1 AND p.aegis_generation=a.verification_token
+        AND p.expires_at>extract(epoch FROM clock_timestamp()) AND t.lease_expires_at<=extract(epoch FROM clock_timestamp())`, op.ID, now)
+		if err != nil {
+			return err
+		}
+		count, err := result.RowsAffected()
+		if err != nil || count != 2 {
+			return errClusterConflict
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET payload_json=(payload_json::jsonb || '{"ssh_pair_reconciliation":1}'::jsonb)::text,updated_at=$2 WHERE id=$1`, op.ID, now); err != nil {
+			return err
+		}
+		if err := insertClusterEvent(ctx, tx, op.ID, "", cluster, "ssh_pair_reconciliation", "running", "Inspect both retained journals and actual membership under a new ownership generation.", map[string]any{"attempt": op.Attempt}, now); err != nil {
+			return err
+		}
+	} else if reason != block && reason != clusterSSHPairStopReason {
 		if _, err = tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET error_text=$2,updated_at=$3 WHERE id=$1`, op.ID, block, now); err != nil {
 			return err
 		}

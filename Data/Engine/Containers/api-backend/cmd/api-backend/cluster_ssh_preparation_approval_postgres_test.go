@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"strings"
 	"testing"
@@ -51,6 +52,93 @@ func newSSHPreparationApprovalFixture(t *testing.T, replacement bool) (sshPrepar
 }
 
 func TestClusterSSHPreparationApprovalPostgresLifecycle(t *testing.T) {
+	t.Run("confirmed pair ownership recovery and cancellation", func(t *testing.T) {
+		f, snap, _, proof := newSSHPreparationApprovalFixture(t, false)
+		plan := &clusterSSHPairInstallation{Inspection: snap.work.Authorization.InspectionSHA256, Configuration: proof.receipts[4], Targets: proof.targetCPU, Packages: proof.packages, Demand: proof.capacity.Targets, SystemDiskBytes: []uint64{clusterSSHSystemDiskMinimum, clusterSSHSystemDiskMinimum}, PostgresImage: clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("a", 64), Manifests: map[string]string{}}
+		for n := range pairManifestLimits() {
+			plan.Manifests[n] = "sha256:" + strings.Repeat("a", 64)
+		}
+		report := clusterSSHQualificationReport{Installation: plan, Version: 2, Attempt: f.op.Attempt, ObservedAt: time.Now().Unix(), Ready: true}
+		for _, c := range clusterSSHPairCheckCodes {
+			report.Checks = append(report.Checks, clusterSSHQualificationCheck{c, "passed"})
+		}
+		for _, target := range plan.Targets {
+			report.Storage = append(report.Storage, clusterSSHTargetStorageCapacity{TargetID: target.TargetID, StoragePath: "/var/lib/longhorn", Fits: true, Budgets: []clusterSSHStorageBudget{{Filesystem: "0000000000000001", AvailableBytes: 16, OtherBytes: 8, Fits: true}}})
+		}
+		if !report.valid(f.op.Attempt) {
+			t.Fatal("invalid prepared report", plan.valid())
+		}
+		delete(f.op.Payload, "ssh_preparation_request")
+		f.op.Payload["ssh_qualification"] = report
+		f.exec(t, `UPDATE engine.cluster_operations SET payload_json=$2 WHERE id=$1`, f.op.ID, marshalClusterJSON(f.op.Payload))
+		store := f.c.store
+		snap, _, err := store.clusterSSHPreparationProposal(f.ctx, f.op.ID)
+		if err != nil {
+			t.Fatal("load single approval", err)
+		}
+		sum, _ := clusterSSHPreparationPlanDigest(snap.work.Authorization)
+		raw := marshalClusterJSON(map[string]any{"request_id": newClusterUUID(), "plan_sha256": sum, "confirmation": "PREPARE ENGINE NODES", "source_id": snap.work.Proof.Source.Members[0].NodeID})
+		_, err = store.requestClusterSSHPreparation(f.ctx, f.op.ID, "admin", []byte(raw))
+		if err != nil {
+			t.Fatal("confirm", err)
+		}
+		refresh := func() {
+			var payload string
+			if err := store.db.QueryRowContext(f.ctx, `SELECT state,current_step,payload_json FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&f.op.State, &f.op.CurrentStep, &payload); err != nil {
+				t.Fatal(err)
+			}
+			f.op.Payload = parseClusterJSON(payload)
+		}
+		refresh()
+		if err = f.c.runSSHPreparationParent(f.ctx, f.op, nil); err != nil {
+			t.Fatal("approve", err)
+		}
+		refresh()
+		fresh := func() clusterSSHPreparationWork {
+			work, err := store.claimFencedSSHPreparation(f.ctx, f.op, f.c.holder, newClusterUUID())
+			if err != nil {
+				t.Fatal("claim pair", err)
+			}
+			return work
+		}
+		original := fresh()
+		if _, err = f.c.claimClusterSSHPreparation(f.ctx, f.op, newClusterUUID()); err == nil {
+			t.Fatal("second owner")
+		}
+		if _, err = store.updateSSHPreparationOwnership(f.ctx, original, true); err != nil {
+			t.Fatal("renew pair", err)
+		}
+		if err = store.openSSHPreparationAllocation(f.ctx, original.Claims); err != nil {
+			t.Fatal("enter native scope", err)
+		}
+		f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=0 WHERE operation_id=$1`, f.op.ID)
+		if err = f.c.settleInterruptedSSHInventory(f.ctx, f.op); err != nil {
+			t.Fatal("schedule journal reconciliation", err)
+		}
+		refresh()
+		recovery := fresh()
+		if recovery.Claims[1].Lease.Generation != original.Claims[1].Lease.Generation+1 {
+			t.Fatal("stale generation")
+		}
+		if _, err = store.updateSSHPreparationOwnership(f.ctx, original, true); err == nil {
+			t.Fatal("old worker renewed")
+		}
+		if err = store.openSSHPreparationAllocation(f.ctx, recovery.Claims); err != nil {
+			t.Fatal("enter recovery", err)
+		}
+		stop, err := store.cancelClusterOperation(f.ctx, "admin", f.op.ID)
+		if err != nil || stop["stop_requested"] != true {
+			t.Fatal("stop", stop, err)
+		}
+		if _, err = store.updateSSHPreparationOwnership(f.ctx, recovery, true); err == nil {
+			t.Fatal("cancelled worker renewed")
+		}
+		status, err := store.clusterSSHInspectionProgress(f.ctx, f.op.ID)
+		if err != nil || !status.StopRequested || len(status.Targets) != 2 {
+			t.Fatal("lost cancelled pair custody", err)
+		}
+	})
+
 	for _, replacement := range []bool{false, true} {
 		t.Run(map[bool]string{false: "expansion", true: "replacement"}[replacement], func(t *testing.T) {
 			f, snapshot, confirmation, proof := newSSHPreparationApprovalFixture(t, replacement)

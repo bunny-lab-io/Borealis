@@ -19,12 +19,22 @@ type clusterSSHPreparationGateScope func(context.Context, clusterSSHPreparationA
 // Only the sole controller evaluates waiting confirmation and commits approval.
 // API executors retain Aegis/identity custody and consume the durable reservation.
 func (c *clusterController) runSSHPreparationParent(ctx context.Context, operation clusterControllerOperation, getJSON func(context.Context, string, any) error) error {
-	if required, _ := operation.Payload["ssh_source_staging_required"].(bool); required && operation.State == "waiting" && operation.CurrentStep == clusterSSHQualificationStep {
-		if operation.Payload["ssh_qualification"] == nil {
-			return c.stageInspectionRelease(ctx, operation)
+	if operation.State == "waiting" && operation.CurrentStep == clusterSSHQualificationStep {
+		if raw, ok := operation.Payload["ssh_qualification"]; ok && raw != nil {
+			count, _ := json.Marshal(operation.Payload["target_count"])
+			var meta struct{ Version int }
+			wire, _ := json.Marshal(raw)
+			if json.Unmarshal(wire, &meta) == nil && (meta.Version == 2 || string(count) == "2") {
+				return c.runSSHPreparationParentWithGates(ctx, operation, getJSON, nil)
+			}
 		}
-		if c.sourceStage == nil {
-			return c.recordSSHPreparationBlocked(ctx, operation, clusterSSHStageLost)
+		if required, _ := operation.Payload["ssh_source_staging_required"].(bool); required {
+			if operation.Payload["ssh_qualification"] == nil {
+				return c.stageInspectionRelease(ctx, operation)
+			}
+			if c.sourceStage == nil {
+				return c.recordSSHPreparationBlocked(ctx, operation, clusterSSHStageLost)
+			}
 		}
 	}
 	var projection clusterSSHPreparationTargetsRead
@@ -81,7 +91,7 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 		}
 		return nil
 	}
-	if operation.State != "waiting" || operation.CurrentStep != clusterSSHQualificationStep || scope == nil {
+	if operation.State != "waiting" || operation.CurrentStep != clusterSSHQualificationStep {
 		return errClusterConflict
 	}
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
@@ -100,6 +110,20 @@ func (c *clusterController) runSSHPreparationParentWithGates(parent context.Cont
 	confirmation, err := parseClusterSSHPreparationRequest(request, snapshot.work.Authorization, snapshot.work.Proof.Source)
 	if err != nil || confirmation.ConfirmedAt > now || now-confirmation.ConfirmedAt >= clusterSSHFreshEvidenceSeconds {
 		return c.recordSSHPreparationBlocked(parent, operation, "Preparation confirmation is expired or changed; inspect and confirm the current plan again.")
+	}
+	if len(snapshot.work.Proof.Cohort.Targets) == 2 && scope == nil {
+		report, err := pairReport(snapshot.work.Payload)
+		if err != nil {
+			return c.recordSSHPreparationBlocked(parent, operation, "Inspect both hosts again to approve a pair installation plan.")
+		}
+		ready, err := pairReadiness(snapshot.work.Authorization, report.Installation)
+		if err != nil {
+			return err
+		}
+		return c.commitSSHInstallation(parent, snapshot, confirmation, ready, func() bool { return parent.Err() == nil })
+	}
+	if scope == nil {
+		return errClusterConflict
 	}
 	if getJSON == nil {
 		return c.recordSSHPreparationBlocked(parent, operation, "Preparation source observation is unavailable; original controller observation is required.")

@@ -34,6 +34,12 @@ func preparationRootScript(artifacts bool) string {
 	if artifacts {
 		verb = "bootstrap-artifact-session"
 	}
+	// Both channels run on the same host-key-pinned SSH connection. The
+	// root wrapper owns FIFO creation and cleanup, including helper failure.
+	script = strings.Replace(script, `chmod 0500 "$root_stage/manager"`, `chmod 0500 "$root_stage/manager"
+data_fifo="/run/borealis-ssh-input-$3"
+/usr/bin/mkfifo -m 0600 -- "$data_fifo"
+trap 'rm -f -- "$data_fifo"; rm -rf -- "$root_stage"' EXIT HUP INT TERM`, 1)
 	return strings.Replace(script, "bootstrap-session --nonce", verb+" --nonce", 1)
 }
 
@@ -518,13 +524,18 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	advance("exchange")
 	var receipt clusterbootstrap.PrejoinPreparationReceipt
 	var cursor clusterbootstrap.PreparationProgress
-	if completion != nil {
-		receipt, err = clusterbootstrap.ExchangePrejoinPreparationSession(ctx, input, output, request, produce, check)
-	} else if progress != nil {
-		cursor, err = clusterbootstrap.ExchangePreparationProgressSession(ctx, input, output, request, produce, check)
-	} else {
-		err = clusterbootstrap.ExchangePreparationSession(ctx, input, output, request, produce, check)
+	upload := func(ctx context.Context) (clusterbootstrap.PreparationStreamReceipt, error) {
+		return client.uploadPreparation(ctx, nonce, sudoPassword, produce)
 	}
+	var p *clusterbootstrap.PreparationProgress
+	var r *clusterbootstrap.PrejoinPreparationReceipt
+	if progress != nil {
+		p = &cursor
+	}
+	if completion != nil {
+		r = &receipt
+	}
+	err = clusterbootstrap.ExchangeSSHPreparation(ctx, input, output, request, upload, check, p, r)
 	if err != nil {
 		reason = preparationFailureReason(err)
 		return ErrBootstrapVerification
@@ -574,3 +585,54 @@ type preparationSSHInput struct {
 
 func (r preparationSSHInput) Close() error      { return r.close() }
 func (r preparationSSHInput) CloseWrite() error { return r.WriteCloser.Close() }
+
+// Root and passwordless sudo leave the password line on stdin. Password sudo
+// consumes it. A fixed nonce marker unambiguously separates login from data.
+// dd cannot create a path if the owning wrapper has already cleaned up.
+func (client *Client) uploadPreparation(ctx context.Context, nonce string, password []byte, produce func(context.Context, io.Writer) error) (clusterbootstrap.PreparationStreamReceipt, error) {
+	var empty clusterbootstrap.PreparationStreamReceipt
+	if _, err := clusterbootstrap.SessionPreamble(nonce); err != nil {
+		return empty, err
+	}
+	s, err := client.ssh.NewSession()
+	if err != nil {
+		return empty, err
+	}
+	defer s.Close()
+	stop := context.AfterFunc(ctx, func() { client.Close() })
+	defer stop()
+	in, err := s.StdinPipe()
+	if err != nil {
+		return empty, err
+	}
+	defer in.Close()
+	if err := s.Start(preparationUploadCommand(nonce)); err != nil {
+		return empty, err
+	}
+	prefix := append(bytes.Clone(password), '\n')
+	prefix = append(prefix, nonce...)
+	prefix = append(prefix, '\n')
+	_, err = in.Write(prefix)
+	clear(prefix)
+	if err != nil {
+		return empty, err
+	}
+	result, err := clusterbootstrap.StreamPreparation(ctx, in, produce)
+	if err != nil || in.Close() != nil || s.Wait() != nil || ctx.Err() != nil {
+		return empty, ErrBootstrapVerification
+	}
+	return result, nil
+}
+
+func preparationUploadCommand(nonce string) string {
+	const copyScript = `set -eu
+IFS= read -r line
+if [ "$line" != "$1" ]; then IFS= read -r line; fi
+test "$line" = "$1"
+unset line
+pipe=/run/borealis-ssh-input-$1
+test -p "$pipe" && test ! -L "$pipe" && test "$(/usr/bin/stat -c %u:%a -- "$pipe")" = 0:600
+exec /usr/bin/dd "of=$pipe" bs=128K conv=nocreat,notrunc status=none`
+	copyCommand := "/usr/bin/timeout --kill-after=2s 32m /bin/sh -c " + shellConstant(copyScript) + " copy " + shellConstant(nonce)
+	return `if [ "$(id -u)" = 0 ]; then exec ` + copyCommand + `; else exec sudo -k -S -p '' -- ` + copyCommand + `; fi`
+}

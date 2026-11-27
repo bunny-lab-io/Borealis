@@ -50,6 +50,21 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 		}
 		return value, nil
 	}
+	initial, err := authority(ctx)
+	if err != nil {
+		return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+	}
+	_, approvedPair := pairReport(initial.payload)
+	if len(initial.Cohort.Targets) == 2 && (initial.Lease.isNetworkQualification() || joining && approvedPair == nil) {
+		value, err := r.pairSourceSnapshot(ctx, initial, authority, census, joining)
+		if err != nil || !cleanup.clean() {
+			if err != nil && blocked != nil {
+				blocked(err.Error())
+			}
+			return clusterSSHPreparationSnapshot{}, clusterbootstrap.ErrPreparationConfig
+		}
+		return value, nil
+	}
 	censusGate := make(chan struct{}, 1)
 	var sites []int64
 	var policy clusterSSHWorkerPolicy
@@ -113,7 +128,7 @@ func (r *kubernetesClusterStepRunner) readSSHStoragePreparationSnapshotFor(ctx c
 	runner.sourceObservationRejected = func(boundary string) {
 		stage = "source network observation: " + boundary
 	}
-	err := withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, finalTiming, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
+	err = withClusterSSHSourceStorageFor(ctx, budget, scopedAuthority, getStorage, finalTiming, func(ctx context.Context, storage clusterSSHStorageRequirements, checks clusterSSHPreparationChecks) error {
 		select {
 		case censusGate <- struct{}{}:
 			policy = storage.WorkerPolicy

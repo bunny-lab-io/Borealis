@@ -3,7 +3,7 @@ import { Alert, Button, Dialog, DialogActions, DialogContent, DialogTitle, Stack
 import ClusterSSHInspection, { validateSSHInspectionTarget } from "./Cluster_SSH_Inspection.jsx";
 import ClusterSSHPreparation from "./Cluster_SSH_Preparation.jsx";
 import { createSSHInspectionSubmission } from "./clusterSSHOnboarding.js";
-import { preparationProgressBinding } from "./clusterSSHPreparation.js";
+import { pairCheckCodes, preparationProgressBinding } from "./clusterSSHPreparation.js";
 import { DIALOG_ACTIONS_SX, DIALOG_BUTTON_SX, DIALOG_CONTENT_SX, DIALOG_DANGER_BUTTON_SX, DIALOG_PAPER_SX, DIALOG_TITLE_SX } from "../DialogStyles.jsx";
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
@@ -21,17 +21,20 @@ const qualificationChecks = {
   replica_capacity: ["Replica storage and rebuild space", "Each target needs space for its replicas, bootstrap copies, application images and rebuild headroom. Existing storage needs a separate recovery plan."],
   network_boot: ["Persistent network configuration", "The Engine could not establish supported persistent network ownership. Review host configuration before retrying."],
   network_arp: ["Local network reachability", "Check the management network, peer identities and cluster virtual IP ownership."],
+  cluster_connectivity: ["System disk and cluster endpoint","Verify the 240 GB system disk and TCP access from this host to the control-plane VIP on port 6443."],
+  installation_inputs: ["Pinned installation inputs","Inspect both hosts again if the approved release or shared configuration changed."],
   remaining_prerequisites: ["Remaining join prerequisites", "Full workload and runtime disk sizing, mount/reboot persistence, recovery and preparation still need qualification. Joining remains unavailable."],
 };
 
 export function validSSHQualification(value, attempt, targets) {
-  if (!value || value.version !== 1 || value.attempt !== attempt || value.ready !== false
+  const pair = value?.version === 2;
+  const codes = pair ? pairCheckCodes : ["source_inputs","host_profile","replica_capacity","network_boot","network_arp","remaining_prerequisites"];
+  if (!value || ![1,2].includes(value.version) || value.attempt !== attempt || typeof value.ready !== "boolean" || (!pair && value.ready) || (pair && targets.length !== 2)
     || !Number.isSafeInteger(value.observed_at) || value.observed_at < 1 || value.observed_at > Math.floor(Date.now() / 1000) + 5
-    || !Array.isArray(value.checks) || value.checks.length !== Object.keys(qualificationChecks).length
-    || !Array.isArray(value.storage) || (value.storage.length !== 0 && value.storage.length !== targets.length)) return false;
-  const codes = Object.keys(qualificationChecks);
+    || !Array.isArray(value.checks) || value.checks.length !== codes.length
+    || !Array.isArray(value.storage) || (value.ready && value.storage.length !== 2) || (value.storage.length !== 0 && value.storage.length !== targets.length)) return false;
   if (!value.checks.every((check, index) => check?.code === codes[index] && ["passed", "blocked", "pending"].includes(check.state)
-    && (index !== codes.length - 1 || check.state === "pending"))) return false;
+    && (pair ? !value.ready || check.state === "passed" : index !== codes.length - 1 || check.state === "pending"))) return false;
   const seen = new Set();
   for (const target of value.storage) {
     if (!target || !targets.some((known) => known.id === target.target_id) || seen.has(target.target_id)
@@ -46,7 +49,7 @@ export function validSSHQualification(value, attempt, targets) {
         || !Number.isSafeInteger(budget.other_bytes + budget.replica_bytes + budget.rebuild_bytes + budget.minimum_free_bytes)) return false;
       filesystems.add(budget.filesystem);
     }
-    if (target.fits !== target.budgets.every((budget) => budget.fits)) return false;
+    if ((value.ready && !target.fits) || target.fits !== target.budgets.every((budget) => budget.fits)) return false;
   }
   return true;
 }
@@ -190,7 +193,7 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
     setCancelling(true);
     try {
       const { response, payload } = await request(`/api/server/cluster/operations/${operationID}/cancel`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirmation: "CANCEL OPERATION" }) }, 15000);
-      if (!response.ok || payload?.state !== "cancelled") throw new Error("cancellation not confirmed");
+      if (!response.ok || (payload?.state !== "cancelled" && payload?.stop_requested !== true)) throw new Error("cancellation not confirmed");
       if (isCurrent()) { setReceivedAt(0); setRefresh((n) => n + 1); callbacks.current.onChanged?.(); }
     } catch { if (isCurrent()) { setReceivedAt(0); setError("Cancellation is not confirmed. Refresh status before taking another action."); } }
     finally {
@@ -217,14 +220,16 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
     submitLabel={index + 1 < targetCount ? "Next host" : "Inspect hosts"} onApprovedTarget={selectTarget} onClose={onClose}
     onBack={index ? () => { clearCredentials(drafts.current); drafts.current = []; setIndex(0); } : undefined} />;
 
-  const canCancel = !submittingID && !cancelling && !mutationPending && receivedAt > 0 && Date.now() - receivedAt <= 15000 && ["queued", "running", "waiting"].includes(progress?.state) && phases.has(progress?.current_step)
-    && progress.targets.every((target) => ["queued", "running", "recovery_required"].includes(target.state) && ["inspect", "inspection_complete", "qualify", "qualification_complete"].includes(target.current_step));
+  const installingPair = progress?.state === "running" && progress.current_step === "prepare_ssh_targets" && progress.qualification?.version === 2 && !progress.stop_requested;
+  const canCancel = !submittingID && !cancelling && !mutationPending && receivedAt > 0 && Date.now() - receivedAt <= 15000 && ["queued", "running", "waiting"].includes(progress?.state) && (installingPair || (phases.has(progress?.current_step)
+    && progress.targets.every((target) => ["queued", "running", "recovery_required"].includes(target.state) && ["inspect", "inspection_complete", "qualify", "qualification_complete"].includes(target.current_step))));
   return <Dialog open onClose={onClose} maxWidth="sm" fullWidth PaperProps={{ sx: DIALOG_PAPER_SX }}>
-    <DialogTitle sx={DIALOG_TITLE_SX}>Engine host inspection</DialogTitle>
+    <DialogTitle sx={DIALOG_TITLE_SX}>{progress?.qualification?.version === 2 ? "Engine pair installation" : "Engine host inspection"}</DialogTitle>
     <DialogContent sx={{ ...DIALOG_CONTENT_SX, overflowY: "auto" }}><Stack spacing={2} sx={{ pt: 1.25 }}>
       {operationID && !validSSHInspectionID(operationID) ? <Alert severity="error">Invalid inspection request ID. Open an inspection from operation history.</Alert> : error ? <Alert severity="warning">{error}</Alert> : null}
       <Typography>{submittingID ? "Submitting approved hosts…" : progress?.state === "waiting" ? (progress.qualification ? "Readiness checks recorded. Review results below." : "Inspection complete. Checking host readiness…") : progress?.state === "cancelled" ? "Inspection ended. Temporary credentials and host reservations released." : progress?.state === "failed" ? "Inspection stopped. Review retained host results before starting over." : progress?.state === "succeeded" ? "Operation finished. Review recorded results and cluster membership." : "Checking approved hosts from this Engine…"}</Typography>
-      {progress?.state === "waiting" ? <Typography>Joining requires further readiness checks. End inspection to release hosts and temporary credentials.</Typography> : null}
+      {progress?.state === "waiting" && !progress.qualification?.ready ? <Typography>Joining requires further readiness checks. End inspection to release hosts and temporary credentials.</Typography> : null}
+      {progress?.stop_requested && <Alert severity="warning">Installation stopped. Both hosts remain reserved for reconciliation.</Alert>}
       {progress?.targets.map((target) => <Stack key={target.id} spacing={0.5} sx={{ p: 1.5, border: "1px solid rgba(148,163,184,0.2)", borderRadius: 2 }}>
         <Typography sx={{ fontWeight: 600 }}>{target.address}:{target.port}</Typography>
         <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>{target.host_key_fingerprint}</Typography>
@@ -233,7 +238,7 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
         {target.report ? <Typography variant="body2">{target.report.hostname} · {target.report.cpu_count} CPUs · {(target.report.memory_kib / 1048576).toFixed(1)} GiB RAM<br />Recorded {new Date(target.inspected_at * 1000).toLocaleString()} · attempt {target.inspected_attempt}, generation {target.inspected_generation}</Typography> : null}
       </Stack>)}
       {progress?.qualification ? <Stack spacing={1} aria-label="Host readiness results">
-        <Typography variant="caption">Recorded {new Date(progress.qualification.observed_at * 1000).toLocaleString()}. Results are observations; preparation requires fresh qualification.</Typography>
+        <Typography variant="caption">Recorded {new Date(progress.qualification.observed_at * 1000).toLocaleString()}. Review the measured capacity before approving installation.</Typography>
         {progress.qualification.checks.map((check) => <Alert key={check.code} severity={check.state === "blocked" ? "warning" : check.state === "passed" ? "success" : "info"}>
           <Typography variant="body2" sx={{ fontWeight: 600 }}>{qualificationChecks[check.code][0]}: {check.state === "passed" ? "Observed" : check.state === "blocked" ? "Blocked" : "Pending"}</Typography>
           {check.state === "blocked" || check.code === "remaining_prerequisites" ? <Typography variant="body2">{qualificationChecks[check.code][1]}</Typography> : null}
@@ -241,7 +246,7 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
         {progress.qualification.storage.map((storage) => <Stack key={storage.target_id} spacing={0.5}>
           <Typography variant="body2">{progress.targets.find((target) => target.id === storage.target_id).address} · {storage.storage_path}</Typography>
           {storage.budgets.map((budget) => <Typography key={budget.filesystem} variant="caption">
-            {(budget.available_bytes / 1073741824).toFixed(1)} GiB available · {((budget.other_bytes + budget.replica_bytes + budget.rebuild_bytes + budget.minimum_free_bytes) / 1073741824).toFixed(1)} GiB budgeted · {budget.fits ? "Fits checked demands" : "Insufficient capacity"}
+            {(budget.available_bytes / 1073741824).toFixed(1)} GiB available · {((budget.other_bytes + budget.replica_bytes + budget.rebuild_bytes + budget.minimum_free_bytes) / 1073741824).toFixed(1)} GiB required (installation {(budget.other_bytes / 1073741824).toFixed(1)}, replicas {(budget.replica_bytes / 1073741824).toFixed(1)}, rebuild {(budget.rebuild_bytes / 1073741824).toFixed(1)}, free reserve {(budget.minimum_free_bytes / 1073741824).toFixed(1)} GiB) · {budget.fits ? "Fits checked demands" : "Insufficient capacity"}
           </Typography>)}
         </Stack>)}
       </Stack> : null}
@@ -253,7 +258,7 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
     <DialogActions sx={DIALOG_ACTIONS_SX}>
       <Button sx={DIALOG_BUTTON_SX} onClick={onClose}>Close</Button>
       <Button sx={DIALOG_BUTTON_SX} disabled={!validSSHInspectionID(operationID) || Boolean(submittingID) || mutationPending} onClick={() => { setReceivedAt(0); setRefresh((n) => n + 1); }}>Refresh status</Button>
-      <Button sx={DIALOG_DANGER_BUTTON_SX} disabled={!canCancel} onClick={() => void cancel()}>End inspection</Button>
+      <Button sx={DIALOG_DANGER_BUTTON_SX} disabled={!canCancel} onClick={() => void cancel()}>{installingPair ? "Stop installation" : "End inspection"}</Button>
     </DialogActions>
   </Dialog>;
 }

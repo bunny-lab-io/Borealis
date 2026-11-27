@@ -12,9 +12,7 @@ import (
 type clusterSSHPreparationChecks struct {
 	Inputs    func(context.Context) error
 	Authority func(context.Context) error
-	// Borrow the source scope and its frozen authority across the worker's paired renewal.
-	bindPairedRenewal func(func(context.Context) error) func(context.Context) error
-	K3sJoin           func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error
+	K3sJoin   func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error
 	// Copied storage projection from the same owned source acquisition. Full
 	// Inputs proof brackets its use; this accessor launches no source Jobs.
 	Storage func(context.Context) (clusterSSHStorageSnapshot, error)
@@ -157,14 +155,6 @@ func newClusterSSHPreparationLeaseProof(authority clusterSSHPreparationAuthority
 			retained = before
 		}
 		return nil
-	}
-}
-
-// Keep the source's cancellation and read/renew/read comparison on both
-// sides of a paired renewal. This callback is used only during native work.
-func bindClusterSSHPreparationRenewal(scope context.Context, proof func(context.Context, func(context.Context) error) error) func(func(context.Context) error) func(context.Context) error {
-	return func(renew func(context.Context) error) func(context.Context) error {
-		return clusterSSHPreparationBoundary(scope, func(ctx context.Context) error { return proof(ctx, renew) }, func(context.Context) error { return nil })
 	}
 }
 

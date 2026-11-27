@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,12 +42,13 @@ type clusterSSHPreparationGateReceipt struct {
 }
 
 type clusterSSHPreparationReadinessReceipt struct {
-	Version    int                                      `json:"version"`
-	PlanSHA256 string                                   `json:"plan_sha256"`
-	Checks     []clusterSSHPreparationGateReceipt       `json:"checks"`
-	Targets    []clusterSSHPreparationTargetCPU         `json:"targets,omitempty"`
-	Capacity   *clusterSSHPreparationCapacityProjection `json:"capacity,omitempty"`
-	Packages   []clusterSSHPreparationTargetPackages    `json:"packages,omitempty"`
+	Configuration string                                   `json:"configuration_sha256,omitempty"`
+	Version       int                                      `json:"version"`
+	PlanSHA256    string                                   `json:"plan_sha256"`
+	Checks        []clusterSSHPreparationGateReceipt       `json:"checks"`
+	Targets       []clusterSSHPreparationTargetCPU         `json:"targets,omitempty"`
+	Capacity      *clusterSSHPreparationCapacityProjection `json:"capacity,omitempty"`
+	Packages      []clusterSSHPreparationTargetPackages    `json:"packages,omitempty"`
 }
 
 func clusterSSHPreparationReadiness(plan string, receipts [6]string) clusterSSHPreparationReadinessReceipt {
@@ -60,8 +62,20 @@ func clusterSSHPreparationReadiness(plan string, receipts [6]string) clusterSSHP
 func parseClusterSSHPreparationReadiness(raw []byte, a clusterSSHPreparationAuthorization) error {
 	var r clusterSSHPreparationReadinessReceipt
 	plan, err := clusterSSHPreparationPlanDigest(a)
+	if err == nil && len(raw) > 0 && len(raw) <= 16<<10 && json.Unmarshal(raw, &r) == nil && r.Version == 5 {
+		canonical, e := json.Marshal(r)
+		if e != nil || !sameClusterSSHStoredJSON(raw, canonical, 0) || r.PlanSHA256 != plan || r.Checks != nil || r.Capacity != nil || !validClusterSSHPreparationDigest(r.Configuration) || len(r.Targets) != 2 || len(a.Targets) != 2 || !validClusterSSHPreparationPackages(r.Targets, r.Packages) {
+			return errClusterConflict
+		}
+		for i, t := range r.Targets {
+			if t.TargetID != a.Targets[i].TargetID || t.CPU.Validate(clusterbootstrap.K3sPins().Version) != nil || !validClusterSSHPreparationDigest(t.ObservationSHA256) {
+				return errClusterConflict
+			}
+		}
+		return nil
+	}
 	if err != nil || len(raw) == 0 || len(raw) > 8<<10 || json.Unmarshal(raw, &r) != nil ||
-		(r.Version != 1 && r.Version != 2 && r.Version != 3 && r.Version != 4) || r.PlanSHA256 != plan || len(r.Checks) != len(clusterSSHPreparationGateCodes) {
+		(r.Version != 1 && r.Version != 2 && r.Version != 3 && r.Version != 4) || r.Configuration != "" || r.PlanSHA256 != plan || len(r.Checks) != len(clusterSSHPreparationGateCodes) {
 		return errClusterConflict
 	}
 	canonical, err := json.Marshal(r)

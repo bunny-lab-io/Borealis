@@ -25,13 +25,16 @@ type clusterSSHIdentityRecoveryReservation struct {
 }
 
 func completedClusterSSHQualification(report *clusterSSHQualificationReport) bool {
-	if report == nil || !report.valid(report.Attempt) || len(report.Checks) != len(clusterSSHQualificationCodes) {
+	if report == nil || !report.valid(report.Attempt) {
 		return false
 	}
 	for index := 0; index < len(report.Checks)-1; index++ {
 		if report.Checks[index].State != "passed" {
 			return false
 		}
+	}
+	if report.Version == 2 {
+		return report.Ready && report.Checks[len(report.Checks)-1].State == "passed"
 	}
 	return report.Checks[len(report.Checks)-1].State == "pending"
 }

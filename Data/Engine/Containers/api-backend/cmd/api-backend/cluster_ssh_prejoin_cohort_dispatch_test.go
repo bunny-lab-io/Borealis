@@ -11,199 +11,72 @@ import (
 )
 
 func TestClusterSSHPrejoinCohortBarrier(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "completed retry", "all completed retry", "first preparation failed", "second preparation failed", "first start sibling drift", "second start sibling drift", "first start authority loss", "second start authority loss", "completed receipt drift", "scope cleanup failed", "scope expected drift", "missing scope", "ignored barrier failure", "start failure", "live sibling custody loss", "first start sibling inputs drift", "second start sibling inputs drift", "sibling inputs drift during proof", "sibling inputs drift after completion", "missing inputs capability"} {
+	for _, mode := range []string{"pair", "replacement", "second prepare fails", "second join fails", "ownership lost", "invalid receipt", "cleanup fails"} {
 		t.Run(mode, func(t *testing.T) {
 			a := sshPrejoinCompletionAuthorityFixture(t, mode == "replacement")
 			claims := make([]clusterSSHNetworkTargetClaim, len(a.Cohort.Targets))
-			expected := make([]clusterbootstrap.PreparationExpected, len(claims))
-			receipts := make([]clusterbootstrap.PrejoinPreparationReceipt, len(claims))
 			for i, target := range a.Cohort.Targets {
 				claims[i] = clusterSSHNetworkTargetClaim{Lease: a.Lease, Sealed: sealedClusterSSHCredentials{binding: target.Binding}}
 				claims[i].Lease.TargetID = target.Binding.TargetID
-				var err error
-				expected[i], err = buildClusterSSHPreparationExpected(a.Cohort, a.Source, claims[i].Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
+			}
+			var phases []clusterSSHInstallPhase
+			opens, closes := 0, 0
+			canceled := false
+			current := func(ctx context.Context) error {
+				if canceled {
+					return clusterbootstrap.ErrSessionAuthority
+				}
+				return ctx.Err()
+			}
+			scope := func(ctx context.Context, i int, consume func(context.Context, clusterbootstrap.PreparationExpected, clusterSSHPrejoinNativeTarget) error) error {
+				opens++
+				defer func() { closes++ }()
+				expected, err := buildClusterSSHPreparationExpected(a.Cohort, a.Source, claims[i].Lease, a.Baseline, a.K3sVersion, "10.42.0.0/16", "10.43.0.0/16")
 				if err != nil {
 					t.Fatal(err)
 				}
-				receipts[i] = sshPrejoinReceiptIdentityFixture(expected[i], *a.IdentitySource, newClusterUUID(), uint64(42+i))
-			}
-			configured, completed := make([]bool, len(claims)), make([]bool, len(claims))
-			active, opens := make([]int, len(claims)), make([]int, len(claims))
-			proofs := make([]int, len(claims))
-			starts, drift, inputDrift := 0, -1, -1
-			inputCalls := make([]int, len(claims))
-			lost, custodyLost := false, false
-			if mode == "completed retry" || mode == "all completed retry" {
-				completed[0] = true
-			}
-			if mode == "all completed retry" {
-				completed[1] = true
-			}
-			current := func(ctx context.Context) error {
-				if lost || ctx.Err() != nil {
-					return clusterbootstrap.ErrSessionAuthority
-				}
-				return nil
-			}
-			scope := func(parent context.Context, i int, consume func(context.Context, clusterbootstrap.PreparationExpected, clusterSSHPrejoinNativeTarget) error) error {
-				opens[i]++
-				if mode == "missing scope" && i == len(claims)-1 {
-					return nil
-				}
-				ctx, cancel := context.WithCancel(parent)
-				defer cancel()
-				active[i]++
-				defer func() { active[i]-- }()
-				target := clusterSSHPrejoinNativeTarget{current: func(ctx context.Context) error {
-					if active[i] == 0 || custodyLost && i == 0 {
-						return clusterbootstrap.ErrSessionAuthority
+				run := func(ctx context.Context, phase clusterSSHInstallPhase, receipt *clusterbootstrap.PrejoinPreparationReceipt) error {
+					if opens != len(claims) || closes != 0 {
+						t.Fatal("input scope escaped")
 					}
-					return current(ctx)
-				}}
-				target.inputs = func(ctx context.Context) error {
-					inputCalls[i]++
-					if active[i] != 1 || inputDrift == i {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					return current(ctx)
-				}
-				if mode == "missing inputs capability" && i == 1 {
-					target.inputs = nil
-				}
-				target.run = func(ctx context.Context, preparation bool, proofStep int, beforeStart, check func(context.Context) error, output *clusterbootstrap.PrejoinPreparationReceipt) error {
-					beforeInputs := append([]int(nil), inputCalls...)
-					if preparation != (check == nil) {
-						t.Fatal("additional live-target proof must match the retained-scope phase")
-					}
-					if current(ctx) != nil || check != nil && check(ctx) != nil {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					if !reflect.DeepEqual(beforeInputs, inputCalls) {
-						t.Fatal("full input check entered native authority callback")
-					}
-					if preparation {
-						if starts != 0 || beforeStart != nil || proofStep != -1 {
-							t.Fatal("preparation invoked after startup")
-						}
-						if mode == "first preparation failed" && i == 0 || mode == "second preparation failed" && i == 1 {
-							return clusterbootstrap.ErrMutationUnknown
-						}
-						configured[i] = true
-						if completed[i] {
-							*output = receipts[i]
-						}
-						return nil
-					}
-					for j := range claims {
-						if !configured[j] || active[j] != 1 {
-							t.Fatal("startup/proof lacked configured sibling and live retained scope")
-						}
-					}
-					if proofStep >= 0 {
-						if drift == i || proofStep == 7 && completed[i] || proofStep == 10 && !completed[i] {
-							return clusterbootstrap.ErrMutationUnknown
-						}
-						proofs[i]++
-						if mode == "sibling inputs drift during proof" && i == 0 && proofs[i] == 2 {
-							inputDrift = 1
-						}
-						if completed[i] {
-							*output = receipts[i]
-							if mode == "completed receipt drift" {
-								output.MemberID++
-							}
-						}
-						return nil
-					}
-					if beforeStart == nil || completed[i] {
-						t.Fatal("missing immediate barrier or completed target replay")
-					}
-					if mode == "first start sibling drift" || mode == "ignored barrier failure" {
-						drift = 1
-					}
-					if mode == "second start sibling drift" && i == 1 {
-						drift = 0
-					}
-					if mode == "first start authority loss" || mode == "second start authority loss" && i == 1 {
-						lost = true
-					}
-					if mode == "first start sibling inputs drift" {
-						inputDrift = 1
-					}
-					if mode == "second start sibling inputs drift" && i == 1 {
-						inputDrift = 0
-					}
-					before := append([]int(nil), proofs...)
-					if err := beforeStart(ctx); err != nil {
-						if mode == "ignored barrier failure" {
-							*output = receipts[i]
-							return nil
-						}
-						return err
-					}
-					for j := range claims {
-						if proofs[j] != before[j]+1 {
-							t.Fatal("cached proof replaced immediate whole-cohort reproof")
-						}
-					}
-					if mode == "live sibling custody loss" {
-						custodyLost = true
-					}
-					if check(ctx) != nil {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					starts++
-					if mode == "start failure" {
+					phases = append(phases, phase)
+					if i == 1 && (mode == "second prepare fails" && phase == prepareBeforeJoin || mode == "second join fails" && phase == joinDrainedServer) {
 						return clusterbootstrap.ErrMutationUnknown
 					}
-					completed[i] = true
-					if mode == "sibling inputs drift after completion" {
-						inputDrift = 1
+					if phase == joinDrainedServer && mode == "ownership lost" {
+						canceled = true
 					}
-					*output = receipts[i]
+					if phase == finishJoinedServer && mode != "invalid receipt" {
+						*receipt = sshPrejoinReceiptIdentityFixture(expected, *a.IdentitySource, newClusterUUID(), uint64(i+42))
+					}
 					return nil
 				}
-				e := expected[i]
-				if mode == "scope expected drift" && opens[i] > 1 {
-					e.Target.Generation++
-				}
-				err := consume(ctx, e, target)
-				if mode == "scope cleanup failed" && starts > 0 {
-					return clusterbootstrap.ErrSessionAuthority
+				err = consume(ctx, expected, clusterSSHPrejoinNativeTarget{current: current, run: run})
+				if mode == "cleanup fails" {
+					return clusterbootstrap.ErrMutationUnknown
 				}
 				return err
 			}
 			result, err := dispatchClusterSSHPrejoinCohort(context.Background(), claims, a.Baseline, *a.IdentitySource, scope, current)
-			success := mode == "pair" || mode == "replacement" || mode == "completed retry" || mode == "all completed retry"
-			if (err == nil) != success {
-				t.Fatal("incorrect cohort outcome", err)
+			success := mode == "pair" || mode == "replacement"
+			if (err == nil) != success || success != (result != nil) || opens != len(claims) || closes != opens {
+				t.Fatal("pair outcome", err, phases)
 			}
-			if success {
-				if len(result) != len(claims) {
-					t.Fatal("missing final cohort")
-				}
-				for i, value := range result {
-					if value.Receipt != receipts[i] || !reflect.DeepEqual(value.Expected, expected[i]) {
-						t.Fatal("changed completion binding")
-					}
-				}
-			} else if result != nil {
-				t.Fatal("failed cohort returned partial success")
-			}
-			for _, count := range active {
-				if count != 0 {
-					t.Fatal("retained scope escaped")
-				}
-			}
-			wantStarts := 0
+			want := []clusterSSHInstallPhase{prepareBeforeJoin, prepareBeforeJoin, joinDrainedServer, joinDrainedServer, finishJoinedServer, finishJoinedServer}
 			switch mode {
-			case "pair":
-				wantStarts = 2
-			case "replacement", "completed retry", "second start sibling drift", "second start authority loss", "completed receipt drift", "scope cleanup failed", "start failure", "second start sibling inputs drift", "sibling inputs drift after completion":
-				wantStarts = 1
+			case "replacement":
+				want = []clusterSSHInstallPhase{prepareBeforeJoin, joinDrainedServer, finishJoinedServer}
+			case "second prepare fails":
+				want = want[:2]
+			case "ownership lost":
+				want = want[:3]
+			case "second join fails":
+				want = want[:4]
+			case "invalid receipt":
+				want = want[:5]
 			}
-			if starts != wantStarts {
-				t.Fatalf("unexpected membership effects: %d, want %d", starts, wantStarts)
+			if !reflect.DeepEqual(phases, want) {
+				t.Fatal("phase order", phases)
 			}
 		})
 	}

@@ -227,8 +227,13 @@ func (service *clusterSSHOnboarding) progress(w http.ResponseWriter, r *http.Req
 	}
 	payload := map[string]any{"operation_id": result.OperationID, "state": result.State,
 		"current_step": result.Step, "attempt": result.Attempt, "targets": result.Targets}
+	if result.StopRequested {
+		payload["stop_requested"] = true
+	}
 	if result.Qualification != nil {
-		payload["qualification"] = result.Qualification
+		q := *result.Qualification
+		q.Installation = nil // Only the operator-visible checks and capacity budgets leave the API.
+		payload["qualification"] = q
 	}
 	writeJSON(w, http.StatusOK, payload)
 }

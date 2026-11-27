@@ -9,11 +9,15 @@ import (
 	"time"
 )
 
+// Includes both bounded package selections in a version 2 report.
+const maxClusterSSHQualificationBytes = 128 << 10
+
 type clusterSSHQualificationCheck struct {
 	Code  string `json:"code"`
 	State string `json:"state"`
 }
 type clusterSSHQualificationReport struct {
+	Installation *clusterSSHPairInstallation `json:"installation,omitempty"`
 	// Historical diagnostics enter the existing fenced completion event only.
 	// They are never serialized into the signed readiness report.
 	vipFailure   clusterSSHVIPFailure
@@ -38,11 +42,15 @@ func newClusterSSHQualificationReport(attempt int64) clusterSSHQualificationRepo
 }
 
 func (r clusterSSHQualificationReport) valid(attempt int64) bool {
-	if r.Version != 1 || r.Attempt != attempt || attempt < 1 || r.ObservedAt < 1 || r.ObservedAt > time.Now().Unix()+5 || r.Ready || len(r.Checks) != len(clusterSSHQualificationCodes) || r.Storage == nil || len(r.Storage) > 2 {
+	codes := clusterSSHQualificationCodes
+	if r.Version == 2 {
+		codes = clusterSSHPairCheckCodes
+	}
+	if (r.Version != 1 && r.Version != 2) || r.Version == 1 && r.Installation != nil || r.Version == 2 && ((r.Installation != nil) != r.Ready || r.Ready && (!r.Installation.valid() || len(r.Storage) != 2)) || r.Attempt != attempt || attempt < 1 || r.ObservedAt < 1 || r.ObservedAt > time.Now().Unix()+5 || r.Ready && r.Version != 2 || len(r.Checks) != len(codes) || r.Storage == nil || len(r.Storage) > 2 {
 		return false
 	}
 	for i, c := range r.Checks {
-		if c.Code != clusterSSHQualificationCodes[i] || !textInSet(c.State, "pending", "passed", "blocked") || (i == len(r.Checks)-1 && c.State != "pending") {
+		if c.Code != codes[i] || !textInSet(c.State, "pending", "passed", "blocked") || (i == len(r.Checks)-1 && r.Version == 1 && c.State != "pending") || r.Version == 2 && r.Ready && c.State != "passed" {
 			return false
 		}
 	}
@@ -86,7 +94,7 @@ func (r clusterSSHQualificationReport) valid(attempt int64) bool {
 			}
 			fits = fits && b.Fits
 		}
-		if target.Fits != fits {
+		if target.Fits != fits || r.Ready && !fits {
 			return false
 		}
 	}
@@ -98,7 +106,7 @@ func parseClusterSSHQualificationReport(raw string, attempt int64) (*clusterSSHQ
 		return nil, nil
 	}
 	var r clusterSSHQualificationReport
-	if len(raw) > 16<<10 || json.Unmarshal([]byte(raw), &r) != nil || !r.valid(attempt) {
+	if len(raw) > maxClusterSSHQualificationBytes || json.Unmarshal([]byte(raw), &r) != nil || !r.valid(attempt) {
 		return nil, errClusterUnavailable
 	}
 	canonical, err := json.Marshal(r)
@@ -139,17 +147,21 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		return report
 	}
 	vipClient, err := newClusterSSHVIPBrokerClientFromEnv()
-	if err != nil {
+	if err != nil && len(work.Claims) != 2 {
 		report.Checks[stage].State = "blocked"
 		return report
 	}
-	err = withClusterSSHNetworkTargets(ctx, store, aegis, work.Baseline, work.Claims, func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
+	consume := func(ctx context.Context, readers clusterSSHNetworkTargetReaders) error {
 		anchor := work.Claims[0]
 		observe := func(check string) {
 			store.recordSSHCheckStarted(ctx, work.Proof.Cohort, work.Payload, check, anchor.Lease)
 		}
 		observe("source_inputs_and_host_profile")
-		source := sourceClient.snapshotRead(readers.Authority, anchor.Lease, work.Baseline, anchor.Sealed)
+		fetch := sourceClient.snapshotRead(readers.Authority, anchor.Lease, work.Baseline, anchor.Sealed)
+		if len(work.Claims) == 2 {
+			return inspectClusterSSHPair(ctx, work, readers, fetch, &report, &stage, observe)
+		}
+		source := fetch
 		profileSourceRead, err := qualifyClusterSSHHostProfile(ctx, readers, source)
 		if profileSourceRead {
 			report.Checks[0].State = "passed"
@@ -195,13 +207,23 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 		}
 		report.Checks[stage].State = "passed"
 		return nil
-	})
+	}
+	inspect := func(ctx context.Context) error {
+		return withClusterSSHNetworkTargets(ctx, store, aegis, work.Baseline, work.Claims, consume)
+	}
+	if len(work.Claims) == 2 {
+		operation := clusterSSHPreparationWork{Claims: work.Claims, Proof: work.Proof, Payload: work.Payload, Baseline: work.Baseline}
+		err = store.withSSHOperationOwnership(ctx, aegis, operation, 5*time.Second, clusterSSHQualificationBudget, func(ctx context.Context, _ func(context.Context) error) error { return inspect(ctx) })
+	} else {
+		err = inspect(ctx)
+	}
 	if err != nil {
 		// A failed/closed scope cannot publish earlier readings as current proof.
 		for i := range report.Checks {
 			report.Checks[i].State = "pending"
 		}
 		report.Checks[stage].State = "blocked"
+		report.Installation, report.Ready = nil, false
 		report.Storage = []clusterSSHTargetStorageCapacity{}
 	}
 	report.ObservedAt = time.Now().Unix()

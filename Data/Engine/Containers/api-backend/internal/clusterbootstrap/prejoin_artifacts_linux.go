@@ -55,7 +55,7 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithActivation(ctx co
 }
 
 func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithReceipt(ctx context.Context, j *MutationJournal, install engineidentity.Installation, material *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, proveHost func(context.Context) error, parent, systemPath string, reconcile bool, runtime *PrejoinK3sActions, join *prejoinK3sJoinPhase, start *prejoinK3sStartPhase, images *prejoinImageVerificationPhase, activate bool, receipt *PrejoinPreparationReceipt) (string, error) {
-	if p == nil || j == nil || artifacts == nil || proveHost == nil || !ValidPostgresImageReference(postgresReference) {
+	if p == nil || j == nil || artifacts == nil || artifacts.published && runtime == nil && join == nil && start == nil && images == nil || proveHost == nil || !ValidPostgresImageReference(postgresReference) {
 		return "", ErrMutationJournal
 	}
 	step, maximum := "stage_images", 6
@@ -245,7 +245,7 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithReceipt(ctx conte
 	proveSource := func(ctx context.Context) error {
 		if prejoinDirectoryBoundary(ctx, j, install) != nil || verifySourceArchive(ctx, archive, p.bundle.asset) != nil ||
 			verifyPublishedSourceWithArtifacts(ctx, archive, filepath.Join(parent, "Borealis"), environment, &identity, &extras) != nil ||
-			verifySourceArchive(ctx, archive, p.bundle.asset) != nil || prejoinDirectoryBoundary(ctx, j, install) != nil {
+			prejoinDirectoryBoundary(ctx, j, install) != nil {
 			return ErrPreparationConfig
 		}
 		return nil
@@ -285,11 +285,10 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithReceipt(ctx conte
 		}
 		prove := func(ctx context.Context, hostLock *os.File) (string, error) {
 			if proveSource(ctx) != nil || proveHost(ctx) != nil || proveArtifacts(ctx, plan, artifactInput, boundary) != nil ||
-				proveHost(ctx) != nil || proveArtifacts(ctx, plan, artifactInput, boundary) != nil ||
-				p.Verify(ctx, p.configuration.wire.Expected, j.authority) != nil || proveSource(ctx) != nil {
+				p.Verify(ctx, p.configuration.wire.Expected, j.authority) != nil {
 				return "", ErrMutationUnknown
 			}
-			if runtime != nil && (runtime.Prove(ctx) != nil || proveSource(ctx) != nil || runtime.Prove(ctx) != nil) {
+			if runtime != nil && runtime.Prove(ctx) != nil {
 				return "", ErrMutationUnknown
 			}
 			if images != nil {
@@ -320,7 +319,7 @@ func (p *PreparationInputs) prejoinArtifactPhaseTransactionWithReceipt(ctx conte
 				}
 				return observation.result(p.configuration.wire.Expected, input)
 			}
-			if join != nil && (join.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil || join.actions.Installed(ctx) != nil || join.actions.Prove(ctx) != nil || proveSource(ctx) != nil || join.actions.Prove(ctx) != nil || join.actions.Installed(ctx) != nil) {
+			if join != nil && (join.material.Verify(ctx, p.configuration.wire.Expected, install.Binding, j.authority) != nil || join.actions.Installed(ctx) != nil || join.actions.Prove(ctx) != nil) {
 				return "", ErrMutationUnknown
 			}
 			return input, nil

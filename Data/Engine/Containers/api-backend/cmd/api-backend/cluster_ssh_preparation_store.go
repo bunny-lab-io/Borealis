@@ -214,7 +214,7 @@ func (s *postgresOperatorStore) completeClusterSSHPreparationVersion(ctx context
 		completion, ok := byTarget[target.Binding.TargetID]
 		credentialDigest, err := clusterSSHPreparationDigest([]string{completion.Sealed.generation, completion.Sealed.ciphertext})
 		reserved := authorization.Targets[i]
-		if !ok || completion.Sealed.binding != target.Binding || completion.Authority.Lease.Generation != reserved.QualificationGeneration+1 ||
+		if !ok || completion.Sealed.binding != target.Binding || completion.Authority.Lease.Generation != reserved.QualificationGeneration+1+pairRecoveryOffset(first.payload) ||
 			err != nil || credentialDigest != reserved.CredentialSHA256 {
 			return errClusterConflict
 		}

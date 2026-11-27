@@ -15,29 +15,20 @@ func TestClusterSSHPrejoinNativeBarrierPhases(t *testing.T) {
 	defer clear(frame)
 	expected, source := request.Expected, request.Source
 	keys := sshIdentitySourceMaterial(t, t.TempDir())
-	for _, mode := range []string{"fresh preparation", "configured retry", "completed retry", "partial startup", "partial verification", "configured proof", "completed proof", "unknown configured proof", "start barrier", "failed barrier", "barrier authority loss", "barrier started drift", "barrier completed drift"} {
-		t.Run(mode, func(t *testing.T) {
-			cursor, prepareOnly, proofStep := "configure_k3s", true, -1
-			switch mode {
-			case "fresh preparation":
-				cursor = "empty"
-			case "completed retry":
-				cursor = "activate_identity"
-			case "partial startup":
-				cursor = "start_k3s"
-			case "partial verification":
-				cursor = "verify_images"
-			case "configured proof", "unknown configured proof":
-				prepareOnly, proofStep = false, 7
-			case "completed proof":
-				prepareOnly, proofStep = false, 10
-			case "start barrier", "failed barrier", "barrier authority loss":
-				prepareOnly = false
-			case "barrier started drift":
-				prepareOnly, cursor = false, "start_k3s"
-			case "barrier completed drift":
-				prepareOnly, cursor = false, "activate_identity"
-			}
+	for _, tc := range []struct {
+		name, cursor    string
+		phase           clusterSSHInstallPhase
+		success, starts bool
+	}{
+		{"configured", "configure_k3s", prepareBeforeJoin, true, false},
+		{"joined", "configure_k3s", joinDrainedServer, true, true},
+		{"lost join acknowledgement", "start_k3s", joinDrainedServer, true, false},
+		{"unknown configured proof", "configure_k3s", joinDrainedServer, false, false},
+		{"join before configured", "prepare_host", joinDrainedServer, false, false},
+		{"finish before membership", "configure_k3s", finishJoinedServer, false, false},
+		{"finish after membership", "start_k3s", finishJoinedServer, true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			var actions []string
 			opened, closed, cursors := 0, 0, 0
 			lost := false
@@ -55,7 +46,7 @@ func TestClusterSSHPrejoinNativeBarrierPhases(t *testing.T) {
 				base := &sshPrejoinDispatchTestClient{
 					inspect: func(context.Context) (clusterbootstrap.PreparationProgress, error) {
 						cursors++
-						return clusterbootstrap.PreparationProgress{Step: cursor}, nil
+						return clusterbootstrap.PreparationProgress{Step: tc.cursor}, nil
 					},
 					close: func() error { closed++; return nil },
 					run: func(_ context.Context, name string, _ *clusterbootstrap.PreparationInputs, _ clusterbootstrap.PreparationExpected, _ engineidentity.Binding, _ *engineidentity.Material, _ []byte, _ func(context.Context) error) error {
@@ -72,7 +63,7 @@ func TestClusterSSHPrejoinNativeBarrierPhases(t *testing.T) {
 							name += " proof"
 						}
 						actions = append(actions, name)
-						if mode == "unknown configured proof" {
+						if tc.name == "unknown configured proof" {
 							return clusterbootstrap.ErrMutationUnknown
 						}
 						return nil
@@ -97,43 +88,17 @@ func TestClusterSSHPrejoinNativeBarrierPhases(t *testing.T) {
 				defer join.Close()
 				return consume(ctx, join, check)
 			}
-			var beforeStart func(context.Context) error
-			if strings.Contains(mode, "barrier") {
-				beforeStart = func(context.Context) error {
-					if opened != closed {
-						t.Fatal("barrier ran while target executor/connection remained open")
-					}
-					actions = append(actions, "barrier")
-					if mode == "failed barrier" {
-						return clusterbootstrap.ErrSessionAuthority
-					}
-					lost = mode == "barrier authority loss"
-					return nil
-				}
-			}
 			var receipt clusterbootstrap.PrejoinPreparationReceipt
 			err := dispatchClusterSSHPrejoinPhase(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{},
-				clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), expected, source, keys, nil, check, acquire, true, &receipt, prepareOnly, proofStep, beforeStart)
-			success := mode != "partial startup" && mode != "partial verification" && mode != "unknown configured proof" && mode != "failed barrier" && mode != "barrier authority loss" && mode != "barrier started drift" && mode != "barrier completed drift"
-			if (err == nil) != success || opened != closed {
-				t.Fatal("incorrect phase outcome/cleanup", err, actions)
+				clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), expected, source, keys, nil, check, acquire, true, &receipt, tc.phase)
+			if (err == nil) != tc.success || opened != closed || cursors != 1 || slices.Contains(actions, "start") != tc.starts {
+				t.Fatal("incorrect phase or repeated join", err, actions)
 			}
-			if proofStep >= 0 && cursors != 0 {
-				t.Fatal("barrier used cursor instead of direct phase proof")
+			if tc.name == "lost join acknowledgement" && !slices.Equal(actions, []string{"start proof"}) {
+				t.Fatal("lost acknowledgement requires actual membership proof", actions)
 			}
-			if strings.HasSuffix(mode, " drift") && len(actions) != 0 {
-				t.Fatal("changed target phase authorized later effects", actions)
-			}
-			if mode == "start barrier" {
-				if slices.Index(actions, "barrier")+1 != slices.Index(actions, "start") {
-					t.Fatal("native mutation preceded immediate barrier", actions)
-				}
-			} else if slices.Contains(actions, "start") {
-				t.Fatal("preparation/proof/failure started K3s", actions)
-			}
-			completed := mode == "completed retry" || mode == "completed proof" || mode == "start barrier"
-			if completed && receipt.Validate(expected, source) != nil || !completed && receipt != (clusterbootstrap.PrejoinPreparationReceipt{}) {
-				t.Fatal("phase fabricated or lost typed final receipt")
+			if tc.phase == joinDrainedServer && (slices.Contains(actions, "images") || slices.Contains(actions, "activation")) {
+				t.Fatal("join waited for application work", actions)
 			}
 		})
 	}

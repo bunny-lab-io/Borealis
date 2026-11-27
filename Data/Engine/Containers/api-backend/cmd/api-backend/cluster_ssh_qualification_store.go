@@ -269,7 +269,7 @@ func (s *postgresOperatorStore) completeClusterSSHQualification(ctx context.Cont
 		return errClusterConflict
 	}
 	raw, err := json.Marshal(report)
-	if err != nil || len(raw) > 16<<10 {
+	if err != nil || len(raw) > maxClusterSSHQualificationBytes {
 		return errClusterConflict
 	}
 	payload["ssh_qualification"] = raw

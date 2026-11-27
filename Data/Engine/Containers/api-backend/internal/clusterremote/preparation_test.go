@@ -2,7 +2,9 @@ package clusterremote
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterbootstraptest"
 	"borealis/api-backend/internal/engineidentity"
+	"borealis/api-backend/internal/testsshpipe"
 	"bufio"
 	"bytes"
 	"context"
@@ -11,7 +13,7 @@ import (
 	"errors"
 	"io"
 	"log"
-	"net"
+
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -52,6 +54,9 @@ func TestPreparationPinnedSSH(t *testing.T) {
 				phase = "reconcile_prejoin_identity_activation"
 			}
 			var server *fakeSSH
+			rawIn, rawOut := io.Pipe()
+			defer rawIn.Close()
+			defer rawOut.Close()
 			var consumed atomic.Bool
 			server = newFakeSSH(t, "preparation", func(command string, channel ssh.Channel) uint32 {
 				var nonce string
@@ -59,6 +64,19 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					if match[1] != digest {
 						nonce = match[1]
 					}
+				}
+				if nonce != "" && command == preparationUploadCommand(nonce) {
+					defer rawOut.Close()
+					reader := bufio.NewReader(channel)
+					pwd, e := reader.ReadString(10)
+					marker, m := reader.ReadString(10)
+					if e != nil || m != nil || pwd != "private sudo fixture\n" || marker != nonce+"\n" {
+						return 1
+					}
+					if _, err := io.Copy(rawOut, reader); err != nil {
+						return 1
+					}
+					return 0
 				}
 				wantCommand := preparationCommand(int64(len(manager)), digest, nonce)
 				if artifactPreparationAction(phase) || clusterbootstrap.HostPackagePreparationAction(phase) {
@@ -92,10 +110,9 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					outReader.Close()
 				}()
 				defer func() { pipeReader.Close(); outWriter.Close(); <-copied; <-outputDone }()
-				serve := clusterbootstrap.ServePreparationSessionWithProgress
-				if artifactPreparationAction(phase) || clusterbootstrap.HostPackagePreparationAction(phase) {
-					serve = func(ctx context.Context, in io.ReadCloser, out io.WriteCloser, nonce string, verify func(context.Context, clusterbootstrap.PreparationSessionRequest) error, receive clusterbootstrap.PreparationSessionProgressReceiver, observe func(time.Time) error) error {
-						return clusterbootstrap.ServeArtifactPreparationSessionWithResult(ctx, in, out, nonce, verify, func(ctx context.Context, r clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
+				serve := func(ctx context.Context, in io.ReadCloser, out io.WriteCloser, nonce string, verify func(context.Context, clusterbootstrap.PreparationSessionRequest) error, receive clusterbootstrap.PreparationSessionProgressReceiver, observe func(time.Time) error) error {
+					return clusterbootstrap.ServeSSHPreparation(ctx, in, out, nonce, artifactPreparationAction(phase) || clusterbootstrap.HostPackagePreparationAction(phase), func(context.Context, string) (io.ReadCloser, error) { return rawIn, nil }, verify,
+						func(ctx context.Context, r clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
 							progress, err := receive(ctx, r, input)
 							result := clusterbootstrap.PreparationSessionResult{Progress: progress}
 							if r.Action == "reconcile_prejoin_identity_activation" && mode != "completion missing" {
@@ -108,7 +125,6 @@ func TestPreparationPinnedSSH(t *testing.T) {
 							}
 							return result, err
 						}, observe)
-					}
 				}
 				err := serve(context.Background(), pipeReader, outWriter, nonce,
 					func(_ context.Context, request clusterbootstrap.PreparationSessionRequest) error {
@@ -330,6 +346,7 @@ func TestPreparationWrapperOwnsScratchAfterHelperExit(t *testing.T) {
 					// Actual copy/hash, child execution and traps run in both shells.
 					fixture := strings.Replace(original, "test \"$(stat -c '%u' -- /opt)\" = 0", "test \"$(stat -c '%u' -- /opt)\" = "+strconv.Itoa(os.Geteuid()), 1)
 					fixture = strings.ReplaceAll(fixture, "/opt", opt)
+					fixture = strings.ReplaceAll(fixture, "/run/borealis-ssh-input-", opt+"/input-")
 					// The root script is itself quoted inside the outer shell text.
 					quotedOriginal, quotedFixture := shellConstant(shellConstant(original)), shellConstant(shellConstant(fixture))
 					quotedOriginal, quotedFixture = quotedOriginal[1:len(quotedOriginal)-1], quotedFixture[1:len(quotedFixture)-1]
@@ -406,12 +423,12 @@ func TestPreparationProgressConcurrentChallenge(t *testing.T) {
 				}
 				ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				defer cancel()
-				client, server := net.Pipe()
+				client, server := testsshpipe.Pipe()
 				defer client.Close()
 				defer server.Close()
 				done := make(chan error, 1)
 				go func() {
-					done <- clusterbootstrap.ServePreparationSessionWithProgress(ctx, server, server, request.Session.Nonce,
+					done <- clusterbootstraptest.ServePreparationSessionWithProgress(ctx, server, server, request.Session.Nonce,
 						func(context.Context, clusterbootstrap.PreparationSessionRequest) error { return nil },
 						func(_ context.Context, _ clusterbootstrap.PreparationSessionRequest, r io.Reader) (clusterbootstrap.PreparationProgress, error) {
 							_, err := io.ReadAll(r)
@@ -454,7 +471,7 @@ func TestPreparationProgressConcurrentChallenge(t *testing.T) {
 					}
 					return nil
 				}, true)
-				progress, err := clusterbootstrap.ExchangePreparationProgressSession(ctx, client, client, request, func(ctx context.Context, w io.Writer) error {
+				progress, err := clusterbootstraptest.ExchangePreparationProgressSession(ctx, client, client, request, func(ctx context.Context, w io.Writer) error {
 					time.Sleep(4 * time.Second)
 					producerStarted.Store(true)
 					if err := check(ctx); err != nil {

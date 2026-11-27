@@ -44,11 +44,17 @@ type clusterSSHPreparationTargetInstanceCPU struct {
 // the source member, and the observed policy cap is enforced before summation.
 func observeClusterSSHPreparationTargetInstanceCPU(read func(string) (map[string]any, error), hostname string,
 	cpu clusterbootstrap.PreparationTargetCPU, policy clusterSSHInstanceManagerResources) (clusterSSHPreparationTargetInstanceCPU, error) {
+	if cpu.Validate(clusterbootstrap.K3sPins().Version) != nil {
+		return clusterSSHPreparationTargetInstanceCPU{}, clusterbootstrap.ErrPreparationConfig
+	}
+	return clusterSSHInstanceCPUForHost(read, hostname, cpu.AllocatableMilli, policy)
+}
+func clusterSSHInstanceCPUForHost(read func(string) (map[string]any, error), hostname string, allocatable uint64, policy clusterSSHInstanceManagerResources) (clusterSSHPreparationTargetInstanceCPU, error) {
 	fail := func() (clusterSSHPreparationTargetInstanceCPU, error) {
 		return clusterSSHPreparationTargetInstanceCPU{}, clusterbootstrap.ErrPreparationConfig
 	}
 	percentage, valid := clusterSSHInstancePercentage(policy.CPUPercentage)
-	if read == nil || !clusterSSHStorageName(hostname) || cpu.Validate(clusterbootstrap.K3sPins().Version) != nil || !valid || policy.CPULimitMilli == 0 || policy.CPULimitMilli > clusterSSHCapacityLimit {
+	if read == nil || !clusterSSHStorageName(hostname) || allocatable == 0 || !valid || policy.CPULimitMilli == 0 || policy.CPULimitMilli > clusterSSHCapacityLimit {
 		return fail()
 	}
 	path := clusterSSHInstanceNodePrefix + hostname
@@ -68,7 +74,7 @@ func observeClusterSSHPreparationTargetInstanceCPU(read func(string) (map[string
 		result.Present, result.OverrideMilli, result.NodeUID = true, uint64(override), id.UID
 		result.ObservationSHA256, err = clusterSSHPreparationDigest(value)
 	}
-	request, ok := clusterSSHInstanceCPURequest(cpu.AllocatableMilli, result.OverrideMilli, percentage)
+	request, ok := clusterSSHInstanceCPURequest(allocatable, result.OverrideMilli, percentage)
 	if err != nil || !ok || request > policy.CPULimitMilli {
 		return fail()
 	}

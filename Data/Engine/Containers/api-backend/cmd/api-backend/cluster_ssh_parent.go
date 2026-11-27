@@ -148,7 +148,7 @@ func (c *clusterController) transitionSSHInspectionParent(ctx context.Context, o
 			return errClusterSSHCohort
 		}
 		digest := sha256.Sum256(raw)
-		payload["ssh_source_staging_required"] = true
+		payload["ssh_source_staging_required"] = len(proof.Cohort.Targets) == 1
 		payload["ssh_inspection"] = map[string]any{"sha256": hex.EncodeToString(digest[:]), "proof": proof, "qualification_required": true}
 		targets = append(targets, proof.Cohort.Targets...)
 		sort.Slice(targets, func(i, j int) bool { return targets[i].Binding.TargetID < targets[j].Binding.TargetID })
@@ -165,8 +165,11 @@ func (c *clusterController) transitionSSHInspectionParent(ctx context.Context, o
 	state, step, event, message := "running", clusterSSHInspectionOperationStep, "ssh_inspection_started", "SSH target inspections started; host preparation is not authorized."
 	errorText := ""
 	if action == "review" {
-		errorText = clusterSSHStagePending
-		state, step, event, message = "waiting", clusterSSHQualificationStep, "ssh_inspection_complete", "SSH inspections complete. The original controller is staging the release for host readiness checks."
+		state, step, event, message = "waiting", clusterSSHQualificationStep, "ssh_inspection_complete", "SSH inspection complete. Checking installation requirements for both hosts."
+		if len(targets) == 1 {
+			errorText = clusterSSHStagePending
+			message = "SSH inspection complete. The original controller is staging the release for the replacement host."
+		}
 	} else if action == "fail" {
 		state, step, event, message = "failed", operation.CurrentStep, "ssh_inspection_failed", "SSH inspection stopped without changing cluster membership or application state."
 		errorText = errClusterSSHCohort.Error()

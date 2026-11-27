@@ -112,7 +112,7 @@ func parseClusterSSHPreparedAuthority(payload string, baseline clusterbootstrap.
 		p := result.Prejoin
 		e := p.Expected
 		b := e.Target
-		if result.Generation != reserved.QualificationGeneration+1 || p.Receipt.Source != selected || e.Source != baseline ||
+		if result.Generation != reserved.QualificationGeneration+1+pairRecoveryOffset(payload) || p.Receipt.Source != selected || e.Source != baseline ||
 			e.KubeSystemUID != proof.Source.KubeSystemUID || e.CohortSHA256 != cohortDigest || e.K3sVersion != version ||
 			e.ControlPlaneVIP != queue.ControlVIP || e.EdgeVIP != queue.EdgeVIP || e.TargetBootID != target.Report.BootID ||
 			e.ManagementCIDR != target.Report.ConnectedPrefix || !slices.Equal(e.PeerAddresses, peers) ||

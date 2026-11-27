@@ -2,11 +2,13 @@ package main
 
 import (
 	"borealis/api-backend/internal/clusterbootstrap"
+	"borealis/api-backend/internal/clusterbootstraptest"
 	"borealis/api-backend/internal/engineidentity"
+	"borealis/api-backend/internal/testsshpipe"
 	"context"
 	"errors"
 	"io"
-	"net"
+
 	"runtime"
 	"strings"
 	"sync"
@@ -216,12 +218,12 @@ func TestClusterSSHPrejoinScopePreparationChallenges(t *testing.T) {
 			defer cancel()
 			err = withClusterSSHPrejoinSourceMaterial(ctx, consumer, root, source, read,
 				func(ctx context.Context, material *engineidentity.Material, refresh func(context.Context) error) error {
-					client, server := net.Pipe()
+					client, server := testsshpipe.Pipe()
 					defer client.Close()
 					defer server.Close()
 					serverResult := make(chan error, 1)
 					go func() {
-						serverResult <- clusterbootstrap.ServePreparationSession(ctx, server, server, request.Session.Nonce,
+						serverResult <- clusterbootstraptest.ServePreparationSession(ctx, server, server, request.Session.Nonce,
 							func(_ context.Context, got clusterbootstrap.PreparationSessionRequest) error {
 								if got.IdentitySource == nil || *got.IdentitySource != source.Binding {
 									return clusterbootstrap.ErrSessionProtocol
@@ -241,7 +243,7 @@ func TestClusterSSHPrejoinScopePreparationChallenges(t *testing.T) {
 								return nil
 							}, func(time.Time) error { return nil })
 					}()
-					exchangeErr := clusterbootstrap.ExchangePreparationSession(ctx, client, client, request,
+					exchangeErr := clusterbootstraptest.ExchangePreparationSession(ctx, client, client, request,
 						func(ctx context.Context, output io.Writer) error {
 							defer producerStopped.Store(true)
 							if revoked {

@@ -16,7 +16,7 @@ import (
 )
 
 func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
-	for _, mode := range []string{"pair", "replacement", "source slice ownership", "native slice ownership", "wrong confirmation", "wrong source", "qualification claim", "acquisition failure", "missing callback", "duplicate callback", "source cleanup failure", "native failure", "native authority failure", "invalid receipt", "wrong expected", "authority drift before dispatch", "authority drift after dispatch", "sibling drift", "cohort renewal failure", "ignored authority failure", "input failure", "late input failure", "ignored join failure", "cancelled", "source error redaction"} {
+	for _, mode := range []string{"pair", "replacement", "source slice ownership", "native slice ownership", "wrong confirmation", "wrong source", "qualification claim", "acquisition failure", "missing callback", "duplicate callback", "source cleanup failure", "native failure", "native authority failure", "invalid receipt", "wrong expected", "authority drift before dispatch", "authority drift after dispatch", "sibling drift", "cohort renewal failure", "ignored authority failure", "input failure", "ignored join failure", "cancelled", "source error redaction"} {
 		t.Run(mode, func(t *testing.T) {
 			a := sshPrejoinCompletionAuthorityFixture(t, mode == "replacement")
 			_, process, _ := existingIdentitySourceFixture(t)
@@ -43,11 +43,12 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 			postgres := clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("a", 64)
 			var escaped clusterSSHPreparationChecks
 			var escapedJoin func(context.Context) error
-			inputCalls, renewals := 0, 0
+			approvedPayload := a.PayloadSHA256
+			inputCalls, ownerChecks := 0, 0
 			checks := clusterSSHPreparationChecks{Storage: func(context.Context) (clusterSSHStorageSnapshot, error) { return clusterSSHStorageSnapshot{}, nil },
 				Inputs: func(context.Context) error {
 					inputCalls++
-					if mode == "input failure" || mode == "late input failure" && dispatched {
+					if mode == "input failure" {
 						return errors.New("private configuration")
 					}
 					return nil
@@ -164,7 +165,10 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 					return nil
 				}, native,
 				func(context.Context) error {
-					renewals++
+					ownerChecks++
+					if a.PayloadSHA256 != approvedPayload {
+						return errClusterConflict
+					}
 					if mode == "cohort renewal failure" && dispatched {
 						return errors.New("private sibling lease")
 					}
@@ -174,13 +178,13 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 			if mode == "input failure" {
 				reportClusterSSHPrejoinCheck(ctx, "outer scope")
 				line := diagnostics.String()
-				if strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "operation="+claim.Lease.OperationID+" check=full input source proof ") || strings.Contains(line, "private configuration") || strings.Contains(line, "outer scope") {
+				if strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "operation="+claim.Lease.OperationID+" check=approved installation inputs ") || strings.Contains(line, "private configuration") || strings.Contains(line, "outer scope") {
 					t.Fatal("first failing input boundary was not recorded safely")
 				}
 			}
 			if mode == "native authority failure" {
 				line := diagnostics.String()
-				if !dispatched || strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "check=preparation authority source proof ") || strings.Contains(line, "private source credential") {
+				if !dispatched || strings.Count(line, "SSH paired preparation rejected") != 1 || !strings.Contains(line, "check=native execution deadline ") || strings.Contains(line, "private source credential") {
 					t.Fatal("native authority rejection lost or exposed its underlying error")
 				}
 			}
@@ -191,8 +195,8 @@ func TestClusterSSHPrejoinWorkerDispatch(t *testing.T) {
 				t.Fatalf("incorrect dispatch outcome: %v", err)
 			}
 			if success {
-				if !closed || !reflect.DeepEqual(result.Expected, owned) || result.Receipt != receipt || inputCalls < 2 || renewals < 2 {
-					t.Fatal("receipt escaped without final source/cohort proof and cleanup")
+				if !closed || !reflect.DeepEqual(result.Expected, owned) || result.Receipt != receipt || inputCalls != 1 || ownerChecks < 2 {
+					t.Fatal("receipt escaped without bound inputs, final ownership and cleanup")
 				}
 			} else if !reflect.DeepEqual(result, clusterSSHPrejoinDispatchResult{}) || err != clusterbootstrap.ErrSessionAuthority {
 				t.Fatal("failed scope leaked evidence or private error")

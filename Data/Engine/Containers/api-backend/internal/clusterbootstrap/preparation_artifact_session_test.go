@@ -2,11 +2,12 @@ package clusterbootstrap
 
 import (
 	"borealis/api-backend/internal/engineidentity"
+	"borealis/api-backend/internal/testsshpipe"
 	"bytes"
 	"context"
 	"crypto/sha256"
 	"io"
-	"net"
+
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -105,7 +106,7 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
 			payload := bytes.Repeat([]byte("bounded authenticated artifact transport"), 80000)

@@ -41,13 +41,22 @@ func (a *PreparationArtifacts) importTargetsLocked(ctx context.Context, check fu
 	defer a.external.mu.Unlock()
 	a.postgres.set.mu.Lock()
 	defer a.postgres.set.mu.Unlock()
-	if a.application.root == nil || a.application.inventory == nil || a.k3s.root == nil || a.k3s.inventory == nil || a.external.root == nil || a.external.inventory == nil || a.postgres.set.root == nil || a.postgres.set.inventory == nil {
+	if (!a.published && (a.application.root == nil || a.k3s.root == nil || a.external.root == nil || a.postgres.set.root == nil)) || a.application.inventory == nil || a.k3s.inventory == nil || a.external.inventory == nil || a.postgres.set.inventory == nil {
 		return nil, ErrImageArchive
 	}
 	if a.k3s.assets[K3sArchiveName] != pins.Archive || a.k3s.inventory.wire.Archive.ArchiveSHA256 != pins.Archive.SHA256 || a.k3s.inventory.wire.Archive.ArchiveBytes != pins.Archive.Size {
 		return nil, ErrImageArchive
 	}
-	result, err := readStagedK3sImportTargets(ctx, a.k3s.root, pins, check)
+	root := a.k3s.root
+	if a.published {
+		installed, err := os.OpenRoot("/var/lib/rancher/k3s/agent/images")
+		if err != nil {
+			return nil, ErrImageArchive
+		}
+		defer installed.Close()
+		root = installed
+	}
+	result, err := readStagedK3sImportTargets(ctx, root, pins, check)
 	if err != nil {
 		return nil, err
 	}

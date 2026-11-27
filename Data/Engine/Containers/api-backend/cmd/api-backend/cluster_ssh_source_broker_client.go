@@ -172,7 +172,17 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 			return fail("workload_budget")
 		}
 		approved, capacityErr := clusterSSHPreparationCapacityReadiness(before.payload)
-		if capacityErr != nil || (approved == nil && (value.CapacitySHA256 != "" || value.CapacityTargets != nil || value.Expected.TargetCPU != nil)) ||
+		if approved != nil && approved.Version == 5 || lease.isNetworkQualification() && len(before.Cohort.Targets) == 2 {
+			if capacityErr != nil || len(value.QualificationCPU) != 2 || value.CapacitySHA256 != "" || len(value.CapacityTargets) != 0 {
+				return fail("pair workload sizing")
+			}
+			if approved != nil {
+				report, err := pairReport(before.payload)
+				if err != nil || !pairConfigurationMatches(before, value, report.Installation) {
+					return fail("approved installation configuration")
+				}
+			}
+		} else if capacityErr != nil || (approved == nil && (value.CapacitySHA256 != "" || value.CapacityTargets != nil || value.Expected.TargetCPU != nil)) ||
 			(approved != nil && (value.CapacitySHA256 != approved.Checks[2].SHA256 || len(value.CapacityTargets) != len(approved.Targets) ||
 				!clusterSSHPreparationCapacityCurrentValid(*approved.Capacity, value.CapacityTargets, joining) ||
 				!clusterSSHPreparationCapacityTransition(retainedCapacity, value.CapacityTargets, joining))) {

@@ -413,7 +413,7 @@ func recheckClusterSSHPreparationCapacity(ctx context.Context, authority cluster
 		}
 		return "", nil, nil
 	}
-	if getJSON == nil || ctx.Err() != nil || value.Expected.TargetCPU == nil || !validClusterSSHPreparationLease(authority.Lease) || authority.Recovery != nil ||
+	if receipt.Capacity == nil || len(receipt.Checks) < 3 || getJSON == nil || ctx.Err() != nil || value.Expected.TargetCPU == nil || !validClusterSSHPreparationLease(authority.Lease) || authority.Recovery != nil ||
 		len(receipt.Targets) != len(authority.Cohort.Targets) || !validClusterSSHStorageSnapshot(value.Storage, authority.Source) {
 		return fail()
 	}

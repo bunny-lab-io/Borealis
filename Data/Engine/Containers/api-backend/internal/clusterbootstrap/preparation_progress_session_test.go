@@ -1,10 +1,11 @@
 package clusterbootstrap
 
 import (
+	"borealis/api-backend/internal/testsshpipe"
 	"bufio"
 	"context"
 	"io"
-	"net"
+
 	"strings"
 	"testing"
 	"time"
@@ -20,7 +21,7 @@ func TestPreparationProgressSession(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
 			result := make(chan error, 1)
@@ -64,9 +65,10 @@ func TestPreparationProgressSenderRejectsForgedCursor(t *testing.T) {
 			digest, _ := request.Digest()
 			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 			defer cancel()
-			client, server := net.Pipe()
+			client, server := testsshpipe.Pipe()
 			defer client.Close()
 			defer server.Close()
+			go io.Copy(io.Discard, server.Data)
 			done := make(chan struct{})
 			go func() {
 				defer close(done)

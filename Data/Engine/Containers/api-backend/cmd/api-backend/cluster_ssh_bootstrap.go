@@ -163,6 +163,18 @@ func resolveClusterBootstrapAssets(ctx context.Context, expected clusterbootstra
 }
 
 func resolveClusterPackagedAssets(ctx context.Context, expected clusterbootstrap.Expected, required map[string]int64) (map[string]clusterBootstrapAsset, error) {
+	assets, err := readClusterPackagedAssets(ctx, expected, required)
+	if err == nil {
+		pins, _ := ctx.Value(clusterSSHPairManifestKey{}).(map[string]string)
+		for name, asset := range assets {
+			if pin, ok := pins[name]; ok && asset.Digest != pin {
+				return nil, errors.New("installation manifest changed since pair approval")
+			}
+		}
+	}
+	return assets, err
+}
+func readClusterPackagedAssets(ctx context.Context, expected clusterbootstrap.Expected, required map[string]int64) (map[string]clusterBootstrapAsset, error) {
 	if err := expected.Validate(); err != nil {
 		return nil, err
 	}

@@ -149,7 +149,7 @@ func TestClusterSSHPreparationControllerPostgresWaiting(t *testing.T) {
 			if state != "waiting" || step != clusterSSHQualificationStep || reason == "" || strings.Contains(payload, "ssh_preparation_authorization") {
 				t.Fatal("blocked preparation advanced", state, step, reason)
 			}
-			if mode == "missing gates" && (!strings.Contains(reason, "clean_targets") || !strings.Contains(reason, "persistent_storage") || strings.Contains(reason, "complete_capacity")) {
+			if mode == "missing gates" && !strings.Contains(reason, "Inspect both hosts again") {
 				t.Fatal("missing actionable native blockers", reason)
 			}
 			var claimed int
@@ -304,7 +304,7 @@ func TestClusterSSHPreparationControllerPostgresNormalLoop(t *testing.T) {
 	if f.c.store.db.QueryRowContext(f.ctx, `SELECT state,current_step,COALESCE(error_text,'') FROM engine.cluster_operations WHERE id=$1`, f.op.ID).Scan(&state, &step, &reason) != nil {
 		t.Fatal("waiting state")
 	}
-	if state != "waiting" || step != clusterSSHQualificationStep || !strings.Contains(reason, "source observation is unavailable") {
+	if state != "waiting" || step != clusterSSHQualificationStep || !strings.Contains(reason, "Inspect both hosts again") {
 		t.Fatal("normal controller did not preserve and diagnose waiting proposal", state, step, reason)
 	}
 }

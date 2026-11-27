@@ -156,12 +156,7 @@ func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
 				storage = nil
 			}
 			checks := clusterSSHPreparationChecks{
-				Inputs: func(context.Context) error {
-					if mode == "source drift" && storageClosed {
-						return errors.New("changed source storage")
-					}
-					return nil
-				},
+				Inputs:    func(ctx context.Context) error { return ctx.Err() },
 				Authority: func(ctx context.Context) error { return ctx.Err() },
 				K3sJoin:   func(context.Context, engineidentity.Binding, clusterSSHJoinMaterialConsumer) error { return nil },
 			}
@@ -200,7 +195,12 @@ func TestClusterSSHPrejoinWorkerStorageBeforeNative(t *testing.T) {
 				return sshPrejoinReceiptFixture(expected, source.Binding), nil
 			}
 			result, err := dispatchClusterSSHPrejoinWorker(ctx, claim, f.a.Baseline, confirmation, source,
-				f.deps.authority(claim), acquire, storage, native, func(ctx context.Context) error { return ctx.Err() })
+				f.deps.authority(claim), acquire, storage, native, func(ctx context.Context) error {
+					if mode == "source drift" && storageClosed {
+						return errors.New("approved plan revoked")
+					}
+					return ctx.Err()
+				})
 			success := mode == "final fitting decrease" || mode == "first target" || mode == "second target" || mode == "native writes"
 			if (err == nil) != success || nativeCalled != (success || mode == "source cleanup") {
 				t.Fatalf("incorrect native/storage boundary: error=%v native=%v", err, nativeCalled)

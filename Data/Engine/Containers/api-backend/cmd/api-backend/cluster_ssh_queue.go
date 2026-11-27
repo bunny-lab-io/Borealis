@@ -124,6 +124,7 @@ func (s *postgresOperatorStore) queueClusterSSHInspections(ctx context.Context, 
 }
 
 type clusterSSHInspectionProgress struct {
+	StopRequested bool                                 `json:"stop_requested,omitempty"`
 	OperationID   string                               `json:"operation_id"`
 	State         string                               `json:"state"`
 	Step          string                               `json:"current_step"`
@@ -159,9 +160,9 @@ func (s *postgresOperatorStore) clusterSSHInspectionProgress(ctx context.Context
  (o.state IN ('queued','running','waiting') AND t.state IN ('queued','running','recovery_required')
  AND t.operation_attempt=o.attempt AND t.credential_state='available' AND EXISTS (SELECT 1 FROM engine.cluster_onboarding_credentials p JOIN engine.aegis_cipher_state a
  ON a.id=1 AND a.verification_token=p.aegis_generation WHERE p.target_id=t.id AND p.expires_at>extract(epoch FROM statement_timestamp()))),
- COALESCE((o.payload_json::json->'ssh_qualification')::text,'')
+ COALESCE((o.payload_json::json->'ssh_qualification')::text,''), COALESCE(o.error_text,'')=$2
  FROM engine.cluster_operations o JOIN engine.cluster_onboarding_targets t ON t.operation_id=o.id
- WHERE o.id=$1 AND o.kind='ssh_onboarding' ORDER BY t.ordinal LIMIT 3`, operationID)
+ WHERE o.id=$1 AND o.kind='ssh_onboarding' ORDER BY t.ordinal LIMIT 3`, operationID, clusterSSHPairStopReason)
 	if err != nil {
 		return fail(errClusterUnavailable)
 	}
@@ -172,7 +173,7 @@ func (s *postgresOperatorStore) clusterSSHInspectionProgress(ctx context.Context
 		var target clusterSSHInspectionProgressTarget
 		var report string
 		if err := rows.Scan(&progress.State, &progress.Step, &progress.Attempt, &target.ID, &target.Address, &target.Port, &target.Fingerprint,
-			&target.State, &target.Step, &target.InspectedAt, &target.InspectedAttempt, &target.InspectedGeneration, &report, &target.CredentialsReady, &qualification); err != nil {
+			&target.State, &target.Step, &target.InspectedAt, &target.InspectedAttempt, &target.InspectedGeneration, &report, &target.CredentialsReady, &qualification, &progress.StopRequested); err != nil {
 			rows.Close()
 			return fail(errClusterUnavailable)
 		}
