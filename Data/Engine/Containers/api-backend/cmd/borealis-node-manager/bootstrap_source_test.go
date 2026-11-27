@@ -10,7 +10,50 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestBootstrapControlInputInterruptsInheritedPipe(t *testing.T) {
+	// Match systemd-run --pipe: stdin starts in blocking mode and the SSH
+	// peer keeps its write end open until the helper returns.
+	var fds [2]int
+	if err := unix.Pipe2(fds[:], unix.O_CLOEXEC); err != nil {
+		t.Fatal(err)
+	}
+	inherited := os.NewFile(uintptr(fds[0]), "inherited stdin")
+	defer inherited.Close()
+	defer unix.Close(fds[1])
+	input, err := bootstrapControlInput(inherited)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer input.Close()
+	var frame [1]byte
+	if err := input.SetReadDeadline(time.Now().Add(20 * time.Millisecond)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := input.Read(frame[:]); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("expected interruptible read with peer still connected, got %v", err)
+	}
+	if err := input.SetReadDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := input.Read(frame[:])
+		result <- err
+	}()
+	input.Close()
+	select {
+	case err := <-result:
+		if !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("expected closed control input, got %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("read did not exit while peer held stdin open")
+	}
+}
 
 func TestBootstrapSourceScratchRequiresOwnedPreparationWrapper(t *testing.T) {
 	valid := "/opt/borealis-bootstrap-root.aB12345678/manager"

@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 var errBootstrapSource = errors.New("source preparation evidence unavailable or changed; private data withheld")
@@ -324,7 +326,12 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			})
 		return report(request, "input_transfer_or_cleanup", err)
 	}
-	sessionErr := clusterbootstrap.ServeSSHPreparation(ctx, os.Stdin, os.Stdout, nonce, artifacts, openBootstrapInput, verify,
+	control, err := bootstrapControlInput(os.Stdin)
+	if err != nil {
+		fatalf("source preparation control input unavailable")
+	}
+	defer control.Close()
+	sessionErr := clusterbootstrap.ServeSSHPreparation(ctx, control, os.Stdout, nonce, artifacts, openBootstrapInput, verify,
 		func(ctx context.Context, request clusterbootstrap.PreparationSessionRequest, input io.Reader) (clusterbootstrap.PreparationSessionResult, error) {
 			err := receive(ctx, request, input)
 			return clusterbootstrap.PreparationSessionResult{Progress: progress, Completion: completion}, err
@@ -333,6 +340,26 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 		fatalf("source preparation failed; inspect journal before any write retry")
 	}
 
+}
+
+// systemd-run --pipe supplies a blocking descriptor. Register a nonblocking
+// duplicate with Go's poller so session cancellation can interrupt a frame
+// read even when the SSH peer is still waiting for our verification result.
+func bootstrapControlInput(inherited *os.File) (*os.File, error) {
+	fd, err := unix.FcntlInt(inherited.Fd(), unix.F_DUPFD_CLOEXEC, 0)
+	if err != nil {
+		return nil, err
+	}
+	if err := unix.SetNonblock(fd, true); err != nil {
+		unix.Close(fd)
+		return nil, err
+	}
+	input := os.NewFile(uintptr(fd), "preparation control input")
+	if err := input.SetReadDeadline(time.Time{}); err != nil {
+		input.Close()
+		return nil, err
+	}
+	return input, nil
 }
 
 func bootstrapSourceScratch(executable string, safe func(string) error) (string, error) {
