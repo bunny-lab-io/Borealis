@@ -304,7 +304,11 @@ func bootstrapSourceSessionContainedFor(args []string, artifacts bool) {
 			if bootstrapK3sConfigurationAction(request.Action) || bootstrapK3sStartupAction(request.Action) {
 				return clusterbootstrap.ConsumePrejoinK3sJoinPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check, consume)
 			}
-			return clusterbootstrap.ConsumePrejoinArtifactPreparation(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check,
+			read := clusterbootstrap.ConsumePrejoinArtifactPreparation
+			if request.Action == "install_prejoin_k3s" || request.Action == "reconcile_prejoin_k3s" {
+				read = clusterbootstrap.ConsumePrejoinPublishedPreparation
+			}
+			return read(ctx, scratch, expected, request.Session.ManagerSHA256, *request.IdentitySource, request.PostgresReference, input, check,
 				func(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, material *engineidentity.Material, assets *clusterbootstrap.PreparationArtifacts) error {
 					return consume(ctx, inputs, material, assets, nil)
 				})

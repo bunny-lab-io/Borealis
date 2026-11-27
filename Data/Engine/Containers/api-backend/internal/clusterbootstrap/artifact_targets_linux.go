@@ -200,7 +200,10 @@ func (t prejoinArtifactTargets) provePhase(ctx context.Context, plan prejoinArti
 	}
 	for _, file := range plan.files {
 		root, path := t.destination(file)
-		if imageBoundary(ctx, check) != nil || provePrejoinArtifactFile(ctx, root, path, file) != nil || !artifactPathAbsent(root, filepath.Join(filepath.Dir(path), prejoinArtifactPending(input, file.path))) {
+		// Only archives already journaled as applied can use metadata here.
+		// Imported image digests are checked before paired application admission.
+		hash := !plan.published || filepath.Dir(file.path) != "var/lib/rancher/k3s/agent/images"
+		if imageBoundary(ctx, check) != nil || checkPrejoinArtifactFile(ctx, root, path, file, hash) != nil || !artifactPathAbsent(root, filepath.Join(filepath.Dir(path), prejoinArtifactPending(input, file.path))) {
 			return ErrImageArchive
 		}
 	}

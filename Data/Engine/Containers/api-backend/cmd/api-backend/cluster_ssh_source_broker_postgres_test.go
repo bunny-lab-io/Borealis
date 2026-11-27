@@ -635,7 +635,16 @@ func runSSHBrokerPostgresCases(t *testing.T, modes []string) {
 			})
 			read := client.preparationRead(f.read, f.lease, f.baseline, f.sealed)
 			expected, settings, err := read(f.ctx)
-			good := mode == "absent CNPG config" || mode == "expansion" || mode == "replacement" || mode == "qualification" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
+			if mode == "qualification" {
+				// This storage fixture deliberately deploys 128 MiB application
+				// limits, inconsistent with the inherited Engine profile.
+				var reason string
+				if err == nil || f.c.store.db.QueryRowContext(f.ctx, `SELECT message FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type='ssh_worker_storage_blocked' ORDER BY created_at DESC LIMIT 1`, f.op.ID).Scan(&reason) != nil || !strings.Contains(reason, "pair source active profile") || jobs.Load() != 1 {
+					t.Fatal("pair accepted incompatible active workload profile or repeated source survey", reason, jobs.Load(), err)
+				}
+				return
+			}
+			good := mode == "absent CNPG config" || mode == "expansion" || mode == "replacement" || strings.Contains(mode, "Secret") || mode == "storage revision changed"
 			if good {
 				if err != nil || expected.Target.TargetID != f.lease.TargetID || !reflect.DeepEqual(settings, sshPreparationRuntimeFixture()) {
 					t.Fatalf("valid private broker source rejected: err=%v target_matches=%t settings_match=%t jobs=%d", err, expected.Target.TargetID == f.lease.TargetID, reflect.DeepEqual(settings, sshPreparationRuntimeFixture()), jobs.Load())

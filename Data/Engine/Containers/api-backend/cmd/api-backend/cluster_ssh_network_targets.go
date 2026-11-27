@@ -349,7 +349,7 @@ func runClusterSSHNetworkTargets(parent context.Context, baseline clusterbootstr
 				switch {
 				case err != nil || client == nil:
 					phase = "connect"
-				case outer != nil && claim.Lease.isNetworkQualification():
+				case owner == nil && outer != nil && claim.Lease.isNetworkQualification():
 					// The complete custody check brackets a controller exchange
 					// with paired DB reads, each independently bounded. Run it
 					// before, during and after the read-only probe. The native

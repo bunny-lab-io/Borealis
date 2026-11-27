@@ -20,6 +20,10 @@ func prejoinArtifactPending(input, path string) string {
 // Exact mode/owner/link/content proof for one immutable publication. This does
 // not infer executable readiness or authorize replacement of an existing path.
 func provePrejoinArtifactFile(ctx context.Context, root *os.Root, path string, file prejoinArtifactFile) error {
+	return checkPrejoinArtifactFile(ctx, root, path, file, true)
+}
+
+func checkPrejoinArtifactFile(ctx context.Context, root *os.Root, path string, file prejoinArtifactFile, verifyContent bool) error {
 	if root == nil || ctx.Err() != nil || filepath.IsAbs(path) || filepath.Clean(path) != path || file.size < 1 || file.size > MaxImageArchiveBytes || !digestPattern.MatchString(file.digest) || file.mode != 0600 && file.mode != 0755 {
 		return ErrImageArchive
 	}
@@ -47,10 +51,12 @@ func provePrejoinArtifactFile(ctx context.Context, root *os.Root, path string, f
 	if err != nil || !metadata(held) || !os.SameFile(before, held) {
 		return ErrImageArchive
 	}
-	h := sha256.New()
-	n, err := io.Copy(h, io.LimitReader(contextReader{ctx, f}, file.size+1))
-	if err != nil || n != file.size || hex.EncodeToString(h.Sum(nil)) != file.digest || ctx.Err() != nil {
-		return ErrImageArchive
+	if verifyContent {
+		h := sha256.New()
+		n, err := io.Copy(h, io.LimitReader(contextReader{ctx, f}, file.size+1))
+		if err != nil || n != file.size || hex.EncodeToString(h.Sum(nil)) != file.digest || ctx.Err() != nil {
+			return ErrImageArchive
+		}
 	}
 	after, err := root.Lstat(path)
 	end, statErr := f.Stat()

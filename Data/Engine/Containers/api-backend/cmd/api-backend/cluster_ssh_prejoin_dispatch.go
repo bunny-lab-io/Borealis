@@ -248,6 +248,16 @@ func withClusterSSHPrejoinNativeScope(parent context.Context, store *postgresOpe
 				}
 				return nil
 			}
+			if _, pair := ctx.Value(clusterSSHPairManifestKey{}).(map[string]string); pair {
+				// Host-key bytes and target identity came from the exact frozen
+				// approval. The live pair fence includes both endpoints.
+				actionBoundary = func(ctx context.Context) error {
+					if preparation(ctx) != nil || sourceRefresh(ctx) != nil {
+						return clusterbootstrap.ErrSessionAuthority
+					}
+					return ctx.Err()
+				}
+			}
 			check := actionBoundary
 			if _, bounded := clusterbootstrap.PreparationTimeRemaining(ctx); bounded {
 				check = clusterbootstrap.CheckPreparationDeadline
@@ -735,8 +745,16 @@ func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context
 	}
 	for index := retained + 1; index < end; index++ {
 		step := steps[index]
-		if _, boundaryErr := run(step[0]); boundaryErr != nil {
+		actionErr, boundaryErr := run(step[0])
+		if boundaryErr != nil {
 			return fail
+		}
+		// Each successful native action proves its effect before recording
+		// applied. Only ambiguous delivery and the final admission receipt
+		// need a separate executor to reconcile on an approved pair.
+		_, pair := parent.Value(clusterSSHPairManifestKey{}).(map[string]string)
+		if pair && actionErr == nil && index != 10 {
+			continue
 		}
 		if proveStep(index) != nil {
 			return fail

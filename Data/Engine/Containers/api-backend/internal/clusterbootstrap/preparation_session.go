@@ -14,7 +14,6 @@ import (
 	"time"
 )
 
-const PreparationChunkBytes = 12 << 10
 const MaxPreparationTransferBytes = MaxBundleBytes + MaxPreparationConfigBytes + MaxManifestBytes + engineidentity.MaxEnvelopeBytes + 256
 const MaxPreparationSessionOutputBytes = 16 << 20
 
@@ -121,7 +120,7 @@ func (r PreparationSessionRequest) Digest() (string, error) {
 	return hex.EncodeToString(sum[:]), nil
 }
 
-// Data is private base64 payload. Never log frames or return them through API
+// Control frames never contain the installation payload. Never log frames or return them through API
 // progress. Native completion evidence remains on this private channel only.
 type PreparationSessionFrame struct {
 	Bytes            int64  `json:"bytes,omitempty"`
@@ -184,7 +183,7 @@ func servePreparationSessionResult(parent context.Context, input io.ReadCloser, 
 		defer close(readDone)
 		for {
 			var frame PreparationSessionFrame
-			if readSessionFrameBounded(reader, &frame, profile.frame) != nil {
+			if ReadSessionFrame(reader, &frame) != nil {
 				return
 			}
 			select {

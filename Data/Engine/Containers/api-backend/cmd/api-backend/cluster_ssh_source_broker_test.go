@@ -791,6 +791,17 @@ func TestClusterSSHQualificationSnapshotTransportDeadline(t *testing.T) {
 		request, a, snapshot := sshBrokerFixture(t)
 		if !joining {
 			request.Lease.OperationStep, request.Lease.Step = clusterSSHQualificationStep, "qualify"
+			for _, target := range a.Cohort.Targets {
+				cpu, err := clusterSSHInstanceCPUForHost(func(string) (map[string]any, error) {
+					node := sshStorageObject("longhorn.io/v1beta2", "Node", "longhorn-system", target.Report.Hostname)
+					node["spec"] = map[string]any{"instanceManagerCPURequest": json.Number("500")}
+					return node, nil
+				}, target.Report.Hostname, uint64(target.Report.CPUCount)*1000, snapshot.Storage.Requirements.LonghornInstanceManagerResources)
+				if err != nil {
+					t.Fatalf("sizing host %s cores=%d instance limit=%d percentage=%q: %v", target.Report.Hostname, target.Report.CPUCount, snapshot.Storage.Requirements.LonghornInstanceManagerResources.CPULimitMilli, snapshot.Storage.Requirements.LonghornInstanceManagerResources.CPUPercentage, err)
+				}
+				snapshot.QualificationCPU = append(snapshot.QualificationCPU, cpu)
+			}
 		}
 		a.Lease = request.Lease
 		broker := newClusterSSHSourceBroker(nil, nil, a.Lease.ControllerHolder, sshBrokerTestSecret)

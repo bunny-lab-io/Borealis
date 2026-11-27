@@ -61,7 +61,7 @@ func (s *postgresOperatorStore) updateSSHPreparationOwnership(parent context.Con
  FROM moment,approved v,engine.cluster_onboarding_targets t,engine.cluster_onboarding_credentials p,
  engine.cluster_operations o,engine.cluster_state c,engine.cluster_application_leases l,engine.aegis_cipher_state a
  WHERE o.id=$7 AND o.attempt=$8 AND o.kind='ssh_onboarding' AND o.state=$17 AND o.current_step=$18
- AND o.payload_json=$9 AND (coalesce(o.error_text,'')='' OR ($17='waiting' AND o.error_text=$20)) AND c.id=1 AND c.active_operation_id=o.id AND c.hmr_state='inactive'
+ AND encode(sha256(convert_to(o.payload_json,'UTF8')),'hex')=$9 AND (coalesce(o.error_text,'')='' OR ($17='waiting' AND o.error_text=$20)) AND c.id=1 AND c.active_operation_id=o.id AND c.hmr_state='inactive'
  AND c.cluster_id=t.cluster_id AND l.name=$10 AND l.holder=$11 AND l.expires_at>moment.now
  AND a.id=1 AND a.verification_token=$12 AND t.id=v.id AND t.operation_id=o.id AND t.operation_attempt=o.attempt
  AND t.state='running' AND t.current_step=$19 AND t.lease_holder=$13 AND t.lease_generation=v.generation
@@ -74,7 +74,7 @@ func (s *postgresOperatorStore) updateSSHPreparationOwnership(parent context.Con
 		state = "waiting"
 	}
 	args := []any{pq.Array(ids), pq.Array(generations), pq.Array(ciphertext), pq.Array(fingerprints), pq.Array(addresses), pq.Array(ports),
-		first.OperationID, first.OperationAttempt, work.Payload, clusterControllerLeaseName, first.ControllerHolder,
+		first.OperationID, first.OperationAttempt, sshPreparationFenceDigest(work.Payload), clusterControllerLeaseName, first.ControllerHolder,
 		work.Claims[0].Sealed.generation, first.Holder, work.Baseline.SourceSHA, clusterSSHTargetLeaseSeconds, renew, state, first.OperationStep, first.Step, clusterSSHStageReady, work.Proof.Source.ClusterID, work.Proof.Source.ActiveSize, work.Proof.Source.DesiredSize, work.Proof.Source.Status}
 	query := eligible
 	if renew {

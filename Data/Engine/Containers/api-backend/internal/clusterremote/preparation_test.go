@@ -47,7 +47,7 @@ func TestPreparationPinnedSSH(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := bytes.Repeat([]byte("private configuration fixture"), 2000)
-	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "publish_prejoin_artifacts", "reconcile_prejoin_artifacts", "install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start", "verify_prepared_images", "reconcile_prepared_images", "activate_prejoin_identity", "reconcile_prejoin_identity_activation", "completion remote failure", "completion authority failure", "completion missing", "completion malformed", "native rejection", "authority rejection", "truncated upload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
+	for _, mode := range []string{"inspect progress", "inspect remote failure", "inspect missing cursor", "reconcile_source_absent", "deliver", "reconcile", "prepare_runtime_identity", "complete_runtime_identity", "reconcile_runtime_identity", "prepare_prejoin_identity_root", "reconcile_prejoin_identity_root", "install_prejoin_identity", "reconcile_prejoin_identity", "prepare_prejoin_host", "complete_prejoin_host", "complete_prejoin_firewall", "resume_fresh_prejoin_host", "resume_repository_prejoin_host", "reconcile_prejoin_host", "publish_prejoin_artifacts", "reconcile_prejoin_artifacts", "install_prejoin_k3s", "reconcile_prejoin_k3s", "configure_prejoin_k3s", "reconcile_prejoin_k3s_configuration", "start_prepared_k3s", "reconcile_prepared_k3s_start", "verify_prepared_images", "reconcile_prepared_images", "activate_prejoin_identity", "reconcile_prejoin_identity_activation", "completion remote failure", "completion authority failure", "completion missing", "completion malformed", "native rejection", "authority rejection", "truncated upload", "truncated payload", "corrupt payload", "producer failure", "remote failure", "stderr overflow", "wrong host pin", "missing inputs"} {
 		t.Run(mode, func(t *testing.T) {
 			phase := mode
 			if strings.HasPrefix(mode, "completion ") {
@@ -72,6 +72,21 @@ func TestPreparationPinnedSSH(t *testing.T) {
 					marker, m := reader.ReadString(10)
 					if e != nil || m != nil || pwd != "private sudo fixture\n" || marker != nonce+"\n" {
 						return 1
+					}
+					if mode == "truncated payload" || mode == "corrupt payload" {
+						raw, err := io.ReadAll(reader)
+						if err != nil || len(raw) < 2 {
+							return 1
+						}
+						if mode == "truncated payload" {
+							raw = raw[:len(raw)-1]
+						} else {
+							raw[0] ^= 1
+						}
+						if _, err := rawOut.Write(raw); err != nil {
+							return 1
+						}
+						return 0
 					}
 					if _, err := io.Copy(rawOut, reader); err != nil {
 						return 1

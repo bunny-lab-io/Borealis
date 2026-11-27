@@ -11,7 +11,7 @@ func (p *PreparationInputs) WritePrejoinK3sJoinPreparation(ctx context.Context, 
 	if join.Verify(ctx, expected, source, check) != nil || out == nil {
 		return ErrK3sJoinMaterial
 	}
-	if artifacts == nil || artifacts.expected != expected.Source || artifacts.k3sVersion != expected.K3sVersion || artifacts.postgresReference != postgresReference || p.WritePrejoinPreparation(ctx, expected, source, identity, out, check) != nil || artifacts.writePublishedInventories(ctx, out, check) != nil || join.WriteJoinMaterial(ctx, expected, source, out, check) != nil {
+	if p.WritePrejoinPublishedPreparation(ctx, expected, source, identity, artifacts, postgresReference, out, check) != nil || join.WriteJoinMaterial(ctx, expected, source, out, check) != nil {
 		return ErrK3sJoinMaterial
 	}
 	return imageBoundary(ctx, check)

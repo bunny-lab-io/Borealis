@@ -24,6 +24,24 @@ func (p *PreparationInputs) WritePrejoinArtifactPreparation(ctx context.Context,
 	return imageBoundary(ctx, check)
 }
 
+// Install and join actions reference the existing journaled image publication.
+func (p *PreparationInputs) WritePrejoinPublishedPreparation(ctx context.Context, expected PreparationExpected, source engineidentity.Binding,
+	identity *engineidentity.Material, artifacts *PreparationArtifacts, postgresReference string, out io.Writer, check func(context.Context) error) error {
+	if artifacts == nil || artifacts.expected != expected.Source || artifacts.k3sVersion != expected.K3sVersion || artifacts.postgresReference != postgresReference {
+		return ErrPreparationConfig
+	}
+	if err := p.WritePrejoinPreparation(ctx, expected, source, identity, out, check); err != nil {
+		return err
+	}
+	return artifacts.writePublishedInventories(ctx, out, check)
+}
+
+func ConsumePrejoinPublishedPreparation(ctx context.Context, parent string, expected PreparationExpected, manager string, source engineidentity.Binding,
+	postgresReference string, input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material, *PreparationArtifacts) error) error {
+	return consumePrejoinArtifactPreparation(ctx, parent, expected, manager, source, postgresReference, input, check, consume, func(ctx context.Context, in io.Reader) (*PreparationArtifacts, error) {
+		return readPublishedInventories(ctx, expected.Source, expected.K3sVersion, postgresReference, in, check, K3sPins(), ExternalImagePins())
+	})
+}
 func ConsumePrejoinArtifactPreparation(ctx context.Context, parent string, expected PreparationExpected, manager string, source engineidentity.Binding,
 	postgresReference string, input io.Reader, check func(context.Context) error, consume func(context.Context, *PreparationInputs, *engineidentity.Material, *PreparationArtifacts) error) error {
 	return consumePrejoinArtifactPreparation(ctx, parent, expected, manager, source, postgresReference, input, check, consume,

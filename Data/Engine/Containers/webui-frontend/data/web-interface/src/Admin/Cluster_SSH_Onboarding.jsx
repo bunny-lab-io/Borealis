@@ -76,6 +76,11 @@ export function validSSHInspectionProgress(value, id) {
         || target.inspected_at > 8640000000000 || target.inspected_attempt > value.attempt) return false;
     } else if (target.inspected_at || target.inspected_attempt || target.inspected_generation) return false;
   }
+  if (value.sizing !== undefined && (!value.sizing || typeof value.sizing !== "object" || value.qualification?.version !== 2
+    || Object.keys(value.sizing).length !== value.targets.length || !value.targets.every((target) => {
+      const budget = value.sizing[target.id];
+      return budget && [budget.system_disk_bytes, budget.required_cpu_milli, budget.required_memory_bytes].every((n) => Number.isSafeInteger(n) && n > 0);
+    }))) return false;
   return value.qualification == null || validSSHQualification(value.qualification, value.attempt, value.targets);
 }
 
@@ -235,6 +240,7 @@ export default function ClusterSSHOnboarding({ targetCount = 2, initialOperation
         <Typography variant="caption" sx={{ overflowWrap: "anywhere" }}>{target.host_key_fingerprint}</Typography>
         <Typography>{({ inspection_complete: "Host inspection recorded", qualify: "Checking host readiness", qualification_complete: "Readiness results recorded" })[target.current_step] || target.state.replaceAll("_", " ")}</Typography>
         <Typography variant="body2">{target.credentials_available ? "Temporary credentials available" : "Temporary credentials unavailable"}</Typography>
+        {progress.sizing?.[target.id] && <Typography variant="body2">System disk {(progress.sizing[target.id].system_disk_bytes / 1e9).toFixed(1)} GB · installation requires {(progress.sizing[target.id].required_cpu_milli / 1000).toFixed(2)} CPU cores and {(progress.sizing[target.id].required_memory_bytes / 1073741824).toFixed(1)} GiB RAM including the host reserve</Typography>}
         {target.report ? <Typography variant="body2">{target.report.hostname} · {target.report.cpu_count} CPUs · {(target.report.memory_kib / 1048576).toFixed(1)} GiB RAM<br />Recorded {new Date(target.inspected_at * 1000).toLocaleString()} · attempt {target.inspected_attempt}, generation {target.inspected_generation}</Typography> : null}
       </Stack>)}
       {progress?.qualification ? <Stack spacing={1} aria-label="Host readiness results">

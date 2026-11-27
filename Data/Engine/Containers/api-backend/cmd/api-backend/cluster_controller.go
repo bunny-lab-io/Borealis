@@ -1446,7 +1446,11 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 		           AND ((t.lease_holder<>'' AND t.lease_expires_at>0
 		             AND t.lease_expires_at<=extract(epoch FROM statement_timestamp()))
 		             OR (t.credential_state='required' AND t.lease_holder='' AND t.lease_expires_at=0))))))
-		   AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
+		   AND NOT (o.kind='ssh_onboarding' AND o.state='waiting' AND o.current_step='qualify_ssh_targets'
+             AND COALESCE(o.payload_json::jsonb->>'target_count','')='2'
+             AND COALESCE(o.payload_json::jsonb->>'ssh_source_staging_required','')='false'
+             AND NOT(o.payload_json::jsonb ? 'ssh_preparation_request'))
+           AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
 		   AND NOT (o.kind='ssh_onboarding' AND COALESCE(o.error_text,'') IN ($1,$2))
 		 FOR UPDATE OF o SKIP LOCKED
 	`, clusterSSHPreparedAdmissionRunning, clusterSSHPreparedAdmissionBlocked).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)

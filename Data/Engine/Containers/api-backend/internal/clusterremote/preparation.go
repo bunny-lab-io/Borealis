@@ -242,6 +242,9 @@ func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clu
 			if join != nil {
 				return inputs.WritePrejoinK3sJoinPreparation(ctx, expected, *source, material, artifacts, postgresReference, join, output, serialized)
 			}
+			if action == "install_prejoin_k3s" || action == "reconcile_prejoin_k3s" {
+				return inputs.WritePrejoinPublishedPreparation(ctx, expected, *source, material, artifacts, postgresReference, output, serialized)
+			}
 			if artifacts != nil {
 				return inputs.WritePrejoinArtifactPreparation(ctx, expected, *source, material, artifacts, postgresReference, output, serialized)
 			}

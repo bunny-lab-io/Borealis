@@ -203,6 +203,25 @@ func withClusterSSHPrejoinSourceMaterialFor(parent context.Context, consumer *en
 	if err != nil {
 		return clusterbootstrap.ErrSessionAuthority
 	}
+	if _, pair := ctx.Value(clusterSSHPairManifestKey{}).(map[string]string); pair {
+		// Verify selected source membership and the serving Pod on key acquisition.
+		// At export, the operation owns the pair and the same process must still
+		// hold the selected identity. A changed identity stops the install.
+		verify := func(c context.Context) error {
+			if c.Err() != nil || !clusterSSHPrejoinLocalProcessMatches(source) {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			current, err := consumer.LoadFrom(root)
+			if err != nil || !keys.Equal(current) {
+				return clusterbootstrap.ErrSessionAuthority
+			}
+			return c.Err()
+		}
+		if verify(ctx) != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		return consume(ctx, keys, verify)
+	}
 	after, err := read(ctx)
 	if err != nil || after != before || ctx.Err() != nil {
 		return clusterbootstrap.ErrSessionAuthority

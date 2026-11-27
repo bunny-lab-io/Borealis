@@ -219,12 +219,14 @@ func runClusterSSHQualification(ctx context.Context, store *postgresOperatorStor
 	}
 	if err != nil {
 		// A failed/closed scope cannot publish earlier readings as current proof.
-		for i := range report.Checks {
-			report.Checks[i].State = "pending"
+		if report.Version != 2 {
+			for i := range report.Checks {
+				report.Checks[i].State = "pending"
+			}
+			report.Storage = []clusterSSHTargetStorageCapacity{}
 		}
 		report.Checks[stage].State = "blocked"
 		report.Installation, report.Ready = nil, false
-		report.Storage = []clusterSSHTargetStorageCapacity{}
 	}
 	report.ObservedAt = time.Now().Unix()
 	return report

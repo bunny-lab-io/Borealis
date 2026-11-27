@@ -1183,6 +1183,9 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 					}
 					return map[string]any{"operation_id": operationID, "kind": kind, "state": state, "current_step": currentStep, "attempt": attempt, "stop_requested": true}, nil
 				}
+				if _, err := tx.ExecContext(ctx, `DELETE FROM engine.cluster_onboarding_credentials WHERE target_id IN (SELECT id FROM engine.cluster_onboarding_targets WHERE operation_id=$1)`, operationID); err != nil {
+					return nil, err
+				}
 				if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_onboarding_targets SET state='cancelled',credential_state='required',lease_holder='',lease_expires_at=0,lease_generation=lease_generation+1,updated_at=$2 WHERE operation_id=$1`, operationID, now); err != nil {
 					return nil, err
 				}

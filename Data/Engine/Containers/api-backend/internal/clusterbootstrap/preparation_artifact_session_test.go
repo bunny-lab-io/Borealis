@@ -69,24 +69,17 @@ func TestArtifactPreparationRequestAndLimits(t *testing.T) {
 		}
 	}
 	legacy, large := preparationProfile(false), preparationProfile(true)
-	if legacy.chunk != PreparationChunkBytes || legacy.frame != MaxSessionFrameBytes || legacy.bytes != MaxPreparationTransferBytes || legacy.lifetime != SessionLifetime {
+	if legacy.bytes != MaxPreparationTransferBytes || legacy.lifetime != SessionLifetime {
 		t.Fatal("ordinary action limits broadened")
 	}
-	if large.bytes < 36*MaxImageArchiveBytes || large.chunk <= legacy.chunk || large.frame < large.chunk*4/3+4096 || large.lifetime != ArtifactPreparationLifetime || large.challenges < int(large.lifetime/SessionChallengeEvery)+1 {
+	if large.bytes < 36*MaxImageArchiveBytes || large.lifetime != ArtifactPreparationLifetime || large.challenges < int(large.lifetime/SessionChallengeEvery)+1 {
 		t.Fatal("complete artifact set exceeds bounded transport")
 	}
 	var frame bytes.Buffer
-	value := PreparationSessionFrame{Protocol: 1, State: "chunk", Data: strings.Repeat("x", large.chunk)}
-	if WriteSessionFrame(&frame, value) == nil {
-		t.Fatal("ordinary frame limit weakened")
+	if WriteSessionFrame(&frame, PreparationSessionFrame{State: "end", Data: strings.Repeat("x", MaxSessionFrameBytes+1)}) == nil {
+		t.Fatal("oversized control frame accepted")
 	}
-	if writeSessionFrameBounded(&frame, value, large.frame) != nil {
-		t.Fatal("artifact frame rejected")
-	}
-	var decoded PreparationSessionFrame
-	if ReadSessionFrame(bytes.NewReader(frame.Bytes()), &decoded) == nil || readSessionFrameBounded(bytes.NewReader(frame.Bytes()), &decoded, large.frame) != nil {
-		t.Fatal("frame class isolation lost")
-	}
+
 }
 
 func TestArtifactPreparationSessionTransfer(t *testing.T) {
@@ -123,7 +116,7 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 						h := sha256.New()
 						var n int64
 						if mode == "authority loss" {
-							prefix := make([]byte, profile.chunk)
+							prefix := make([]byte, (256 << 10))
 							read, err := io.ReadFull(in, prefix)
 							if err != nil || read != len(prefix) {
 								return PreparationProgress{}, ErrSessionProtocol
@@ -152,8 +145,8 @@ func TestArtifactPreparationSessionTransfer(t *testing.T) {
 				produced.Store(true)
 				defer producerExited.Store(true)
 				if mode == "authority loss" {
-					n, err := out.Write(payload[:profile.chunk])
-					if err != nil || n != profile.chunk {
+					n, err := out.Write(payload[:(256 << 10)])
+					if err != nil || n != (256<<10) {
 						return ErrSessionProtocol
 					}
 					partialSent.Store(true)

@@ -89,10 +89,13 @@ func TestClusterSSHPrejoinNativeBarrierPhases(t *testing.T) {
 				return consume(ctx, join, check)
 			}
 			var receipt clusterbootstrap.PrejoinPreparationReceipt
-			err := dispatchClusterSSHPrejoinPhase(context.Background(), connect, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{},
+			err := dispatchClusterSSHPrejoinPhase(context.WithValue(context.Background(), clusterSSHPairManifestKey{}, map[string]string{}), connect, &clusterbootstrap.PreparationInputs{}, &clusterbootstrap.PreparationArtifacts{},
 				clusterbootstrap.PostgresImageRepository+"@sha256:"+strings.Repeat("a", 64), expected, source, keys, nil, check, acquire, true, &receipt, tc.phase)
 			if (err == nil) != tc.success || opened != closed || cursors != 1 || slices.Contains(actions, "start") != tc.starts {
 				t.Fatal("incorrect phase or repeated join", err, actions)
+			}
+			if tc.name == "joined" && slices.Contains(actions, "start proof") {
+				t.Fatal("repeated successful journaled start", actions)
 			}
 			if tc.name == "lost join acknowledgement" && !slices.Equal(actions, []string{"start proof"}) {
 				t.Fatal("lost acknowledgement requires actual membership proof", actions)

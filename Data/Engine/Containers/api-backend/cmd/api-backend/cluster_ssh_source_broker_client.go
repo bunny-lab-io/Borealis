@@ -176,6 +176,14 @@ func (c *clusterSSHSourceBrokerClient) snapshotReadFor(authority clusterSSHPrepa
 			if capacityErr != nil || len(value.QualificationCPU) != 2 || value.CapacitySHA256 != "" || len(value.CapacityTargets) != 0 {
 				return fail("pair workload sizing")
 			}
+			for i, n := range value.QualificationCPU {
+				policy := value.Storage.Requirements.LonghornInstanceManagerResources
+				percent, valid := clusterSSHInstancePercentage(policy.CPUPercentage)
+				cost, ok := clusterSSHInstanceCPURequest(uint64(before.Cohort.Targets[i].Report.CPUCount)*1000, n.OverrideMilli, percent)
+				if !valid || !ok || n.RequestMilli != cost || cost > policy.CPULimitMilli || !validClusterSSHPreparationDigest(n.ObservationSHA256) || (n.Present && !clusterUUIDRE.MatchString(n.NodeUID)) || (!n.Present && (n.OverrideMilli != 0 || n.NodeUID != "")) {
+					return fail("target Longhorn CPU request")
+				}
+			}
 			if approved != nil {
 				report, err := pairReport(before.payload)
 				if err != nil || !pairConfigurationMatches(before, value, report.Installation) {

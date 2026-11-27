@@ -232,6 +232,14 @@ func (service *clusterSSHOnboarding) progress(w http.ResponseWriter, r *http.Req
 	}
 	if result.Qualification != nil {
 		q := *result.Qualification
+		if plan := q.Installation; plan != nil {
+			sizing := make(map[string]map[string]uint64, len(plan.Targets))
+			for i, t := range plan.Targets {
+				demand := plan.Demand[i].Capacity
+				sizing[t.TargetID] = map[string]uint64{"system_disk_bytes": plan.SystemDiskBytes[i], "required_cpu_milli": demand.CPURequestMilli, "required_memory_bytes": demand.MemoryLimitBytes + demand.HostMemoryReserveBytes}
+			}
+			payload["sizing"] = sizing
+		}
 		q.Installation = nil // Only the operator-visible checks and capacity budgets leave the API.
 		payload["qualification"] = q
 	}

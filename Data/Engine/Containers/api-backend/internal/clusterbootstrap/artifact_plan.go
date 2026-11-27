@@ -25,8 +25,9 @@ type prejoinArtifactFile struct {
 }
 
 type prejoinArtifactPlan struct {
-	files  []prejoinArtifactFile
-	digest string
+	published bool
+	files     []prejoinArtifactFile
+	digest    string
 }
 
 // Caller holds aggregate ownership for the complete publication transaction.
@@ -48,7 +49,7 @@ func (a *PreparationArtifacts) publicationPlan(ctx context.Context, check func(c
 	if (!a.published && (a.application.root == nil || a.k3s.root == nil || a.external.root == nil || a.postgres.set.root == nil)) || a.application.inventory == nil || a.k3s.inventory == nil || a.external.inventory == nil || a.postgres.set.inventory == nil {
 		return invalid, ErrImageArchive
 	}
-	plan := prejoinArtifactPlan{}
+	plan := prejoinArtifactPlan{published: a.published}
 	for _, proof := range a.application.inventory.Images() {
 		plan.files = append(plan.files, prejoinArtifactFile{path: filepath.Join("var/lib/rancher/k3s/agent/images", imagePinnedArchive(proof)), mode: 0600, size: proof.ArchiveBytes, digest: proof.ArchiveSHA256,
 			write: func(ctx context.Context, out io.Writer, check func(context.Context) error) error {

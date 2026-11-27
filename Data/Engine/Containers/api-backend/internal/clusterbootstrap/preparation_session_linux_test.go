@@ -81,7 +81,7 @@ func TestPreparationSessionRejectsForgedStream(t *testing.T) {
 			case "base64":
 				frame.Data = "invalid!"
 			case "oversized chunk":
-				frame.Data = base64.StdEncoding.EncodeToString(make([]byte, PreparationChunkBytes+1))
+				frame.Data = base64.StdEncoding.EncodeToString(make([]byte, (12<<10)+1))
 			case "empty end":
 				frame.State = "end"
 				frame.Data = ""
@@ -244,7 +244,7 @@ func TestPreparationSessionFailureCleanup(t *testing.T) {
 					<-ctx.Done()
 					return ctx.Err()
 				}
-				_, err := io.Copy(output, bytes.NewReader(bytes.Repeat([]byte("secret"), PreparationChunkBytes)))
+				_, err := io.Copy(output, bytes.NewReader(bytes.Repeat([]byte("secret"), (12<<10))))
 				return err
 			}, func(context.Context) error {
 				if checks.Add(1) > 2 && mode == "authority loss" {

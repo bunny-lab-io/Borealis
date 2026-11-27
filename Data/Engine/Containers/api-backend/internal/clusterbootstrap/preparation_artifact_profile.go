@@ -13,20 +13,20 @@ func bulkPreparationAction(action string) bool {
 }
 
 type preparationTransportProfile struct {
-	artifacts                bool
-	chunk, frame, challenges int
-	bytes, output            int64
-	lifetime                 time.Duration
+	artifacts     bool
+	challenges    int
+	bytes, output int64
+	lifetime      time.Duration
 }
 
 // Artifact-specific bounds cover 34 archives, binary and installer plus bounded
-// inventories/framing. One outstanding chunk still enforces backpressure; the
+// inventories. SSH supplies flow control for the data channel. The
 // existing heartbeat deadline and independent watchdog remain unchanged.
 func preparationProfile(artifacts bool) preparationTransportProfile {
 	if artifacts {
-		return preparationTransportProfile{true, 256 << 10, 512 << 10, 512,
+		return preparationTransportProfile{true, 512,
 			MaxPreparationTransferBytes + 36*MaxImageArchiveBytes + 8*MaxImageInventoryBytes, 128 << 20, ArtifactPreparationLifetime}
 	}
-	return preparationTransportProfile{false, PreparationChunkBytes, MaxSessionFrameBytes, 64,
+	return preparationTransportProfile{false, 64,
 		MaxPreparationTransferBytes, MaxPreparationSessionOutputBytes, SessionLifetime}
 }

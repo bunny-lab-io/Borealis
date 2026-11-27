@@ -20,6 +20,11 @@ type clusterSSHPreparationGateScope func(context.Context, clusterSSHPreparationA
 // API executors retain Aegis/identity custody and consume the durable reservation.
 func (c *clusterController) runSSHPreparationParent(ctx context.Context, operation clusterControllerOperation, getJSON func(context.Context, string, any) error) error {
 	if operation.State == "waiting" && operation.CurrentStep == clusterSSHQualificationStep {
+		if required, ok := operation.Payload["ssh_source_staging_required"].(bool); ok && !required && operation.Payload["ssh_qualification"] == nil {
+			// Inspection and qualification belong to the pinned worker. The
+			// controller has no work until it receives a confirmed pair.
+			return nil
+		}
 		if raw, ok := operation.Payload["ssh_qualification"]; ok && raw != nil {
 			count, _ := json.Marshal(operation.Payload["target_count"])
 			var meta struct{ Version int }
