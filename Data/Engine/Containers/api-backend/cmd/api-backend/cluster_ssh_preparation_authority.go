@@ -291,7 +291,11 @@ func (s *postgresOperatorStore) loadClusterSSHPreparationAuthority(ctx context.C
 	if validateClusterSSHInspectionCohort(proof.Cohort, proof.Source) != nil || ctx.Err() != nil {
 		return fail()
 	}
-	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: proof.Source, Queue: queue, Lease: lease, Baseline: baseline,
+	observedSource, err := pairSourceBoot(payload, proof.Source, true)
+	if err != nil {
+		return fail()
+	}
+	return clusterSSHPreparationAuthority{Cohort: proof.Cohort, Source: observedSource, Queue: queue, Lease: lease, Baseline: baseline,
 		K3sVersion: version, PayloadSHA256: payloadDigest, Recovery: recovery, IdentitySource: identitySource, payload: payload}, nil
 }
 

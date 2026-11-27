@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -42,6 +43,26 @@ func main() {
 
 	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
+
+	if clusterbootstrap.IsPairExecutor() {
+		if len(os.Args) == 2 && os.Args[1] == "pair-recovery-check" {
+			ctx, cancel := context.WithTimeout(rootCtx, 10*time.Second)
+			defer cancel()
+			if err := checkPairRecoveryDeployment(ctx, cfg, os.Stdout); err != nil {
+				log.Fatalf("stopped pair proof rejected: %v", err)
+			}
+			return
+		}
+		if len(os.Args) == 2 && os.Args[1] == "pair-recovery-worker" {
+			if err := runPairRecoveryWorker(rootCtx, cfg, os.Stdin); err != nil {
+				log.Fatalf("pair recovery worker: %v", err)
+			}
+			return
+		}
+		if !clusterControllerMode() {
+			log.Fatal("pair executor requires recovery worker or original controller mode")
+		}
+	}
 
 	if apiHealthcheckMode() {
 		if err := runGoAPIHealthcheck(rootCtx, cfg); err != nil {

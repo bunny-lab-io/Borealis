@@ -51,7 +51,18 @@ func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, so
 	// Only the read's clock advances; inspected_at remains part of the proof.
 	stableCohort := cohort
 	stableCohort.ObservedAt = 0
-	raw, err := json.Marshal(clusterSSHParentProof{Version: 1, Cohort: stableCohort, Source: source})
+	inputSource := source
+	if clusterbootstrap.IsPairExecutor() {
+		if len(payload) != 1 {
+			return fail()
+		}
+		var err error
+		inputSource, err = pairSourceBoot(payload[0], source, false)
+		if err != nil {
+			return fail()
+		}
+	}
+	raw, err := json.Marshal(clusterSSHParentProof{Version: 1, Cohort: stableCohort, Source: inputSource})
 	if err != nil || len(raw) > 128<<10 {
 		return fail()
 	}

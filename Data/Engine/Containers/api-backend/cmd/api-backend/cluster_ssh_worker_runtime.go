@@ -138,7 +138,7 @@ func (s *postgresOperatorStore) pendingClusterSSHPreparation(ctx context.Context
  AND n.node_name=$3 AND n.membership_state='Active'
  AND EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t WHERE t.operation_id=o.id)
  AND NOT EXISTS(SELECT 1 FROM engine.cluster_onboarding_targets t WHERE t.operation_id=o.id AND
- (t.state='queued' AND (t.current_step='qualification_complete' OR (t.current_step='pair_reconcile' AND o.payload_json::jsonb->>'ssh_pair_reconciliation'='1')) AND t.lease_holder='' AND t.lease_expires_at=0) IS NOT TRUE)
+ (t.state='queued' AND (t.current_step='qualification_complete' OR (t.current_step='pair_reconcile' AND o.payload_json::jsonb->>'ssh_pair_reconciliation' IN ('1','2'))) AND t.lease_holder='' AND t.lease_expires_at=0) IS NOT TRUE)
  LIMIT 1`, clusterSSHPreparationOperationStep, clusterControllerLeaseName, sourceNode).Scan(&pending.Operation.ID,
 		&pending.Operation.Kind, &pending.Operation.State, &pending.Operation.CurrentStep, &pending.Operation.Attempt, &pending.Controller)
 	if errors.Is(err, sql.ErrNoRows) {

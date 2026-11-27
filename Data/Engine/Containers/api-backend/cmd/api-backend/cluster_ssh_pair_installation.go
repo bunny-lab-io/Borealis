@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"reflect"
+	"slices"
 
 	"borealis/api-backend/internal/clusterbootstrap"
 	"borealis/api-backend/internal/clusterremote"
@@ -271,7 +272,19 @@ func pairReport(payload string) (*clusterSSHQualificationReport, error) {
 }
 
 func pairConfigurationMatches(a clusterSSHPreparationAuthority, v clusterSSHPreparationSnapshot, p *clusterSSHPairInstallation) bool {
-	digest, err := clusterSSHPreparationConfigurationReceiptFromSettings(a.Baseline, clusterSSHParentProof{Version: 1, Cohort: a.Cohort, Source: a.Source}, p.Inspection, a.K3sVersion, v.Settings, v.Observation, v.Sources)
+	inputSource, err := pairSourceBoot(a.payload, a.Source, false)
+	if err != nil {
+		return false
+	}
+	networks := v.Sources
+	if clusterbootstrap.IsPairExecutor() {
+		if len(networks) != 1 || networks[0].NodeUID != a.Source.Members[0].NodeUID || networks[0].BootID != a.Source.Members[0].BootID {
+			return false
+		}
+		networks = slices.Clone(networks)
+		networks[0].BootID = inputSource.Members[0].BootID
+	}
+	digest, err := clusterSSHPreparationConfigurationReceiptFromSettings(a.Baseline, clusterSSHParentProof{Version: 1, Cohort: a.Cohort, Source: inputSource}, p.Inspection, a.K3sVersion, v.Settings, v.Observation, networks)
 	return err == nil && digest == p.Configuration && v.Storage.Requirements.PostgresImage.Resolved == p.PostgresImage
 }
 
@@ -385,8 +398,8 @@ func pairRecoveryOffset(payload string) int64 {
 			Version int `json:"version"`
 		} `json:"ssh_preparation_readiness"`
 	}
-	if json.Unmarshal([]byte(payload), &record) != nil || record.Repeat != 1 || record.Readiness.Version != 5 {
+	if json.Unmarshal([]byte(payload), &record) != nil || (record.Repeat != 1 && record.Repeat != 2) || record.Readiness.Version != 5 {
 		return 0
 	}
-	return 1
+	return int64(record.Repeat)
 }

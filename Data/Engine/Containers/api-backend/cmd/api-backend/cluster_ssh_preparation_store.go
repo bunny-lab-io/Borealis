@@ -178,7 +178,8 @@ func (s *postgresOperatorStore) completeClusterSSHPreparationVersion(ctx context
 	stableCohort.ObservedAt = 0
 	inspectedCohort := inspection.Cohort
 	inspectedCohort.ObservedAt = 0
-	if !reflect.DeepEqual(stableCohort, inspectedCohort) || !reflect.DeepEqual(first.Source, inspection.Source) {
+	observedSource, err := pairSourceBoot(first.payload, inspection.Source, true)
+	if err != nil || !reflect.DeepEqual(stableCohort, inspectedCohort) || !reflect.DeepEqual(first.Source, observedSource) {
 		return errClusterConflict
 	}
 	for _, completion := range completions {
@@ -215,7 +216,7 @@ func (s *postgresOperatorStore) completeClusterSSHPreparationVersion(ctx context
 		credentialDigest, err := clusterSSHPreparationDigest([]string{completion.Sealed.generation, completion.Sealed.ciphertext})
 		reserved := authorization.Targets[i]
 		if !ok || completion.Sealed.binding != target.Binding || completion.Authority.Lease.Generation != reserved.QualificationGeneration+1+pairRecoveryOffset(first.payload) ||
-			err != nil || credentialDigest != reserved.CredentialSHA256 {
+			err != nil || !pairCredentialMatches(first.payload, authorization, i, credentialDigest) {
 			return errClusterConflict
 		}
 		receipt.Targets = append(receipt.Targets, completion.Result)

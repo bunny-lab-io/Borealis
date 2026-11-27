@@ -13,6 +13,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -202,6 +203,10 @@ func (client *Client) preparationWithK3sJoinResult(ctx context.Context, inputs *
 	return client.preparationWithCompletion(ctx, inputs, expected, action, source, material, artifacts, postgresReference, join, sudoPassword, check, progress, nil)
 }
 
+// The recovery worker embeds its matched helper digest at build time. Only
+// that build uses the helper staged alongside the worker by the recovery job.
+var pairExecutorSHA256 string
+
 func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clusterbootstrap.PreparationInputs, expected clusterbootstrap.PreparationExpected,
 	action string, source *engineidentity.Binding, material *engineidentity.Material, artifacts *clusterbootstrap.PreparationArtifacts, postgresReference string,
 	join *clusterbootstrap.K3sJoinMaterial, sudoPassword []byte, check func(context.Context) error, progress *clusterbootstrap.PreparationProgress, completion *clusterbootstrap.PrejoinPreparationReceipt) error {
@@ -234,7 +239,24 @@ func (client *Client) preparationWithCompletion(ctx context.Context, inputs *clu
 	if err != nil || bundleSource != expected.Source {
 		return ErrBootstrapVerification
 	}
-	return client.transferPreparationCompletion(ctx, bundle.ManagerPath(), digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
+	managerPath := bundle.ManagerPath()
+	if clusterbootstrap.IsPairExecutor() {
+		catalog, err := clusterbootstrap.CatalogManagerForExecution(expected, pairExecutorSHA256)
+		if err != nil || catalog != digest || pairExecutorSHA256 == digest {
+			return ErrBootstrapVerification
+		}
+		exe, err := os.Executable()
+		if err != nil {
+			return ErrBootstrapVerification
+		}
+		managerPath = filepath.Join(filepath.Dir(exe), "pair-node-manager")
+		info, err := os.Stat(managerPath)
+		if err != nil || !info.Mode().IsRegular() {
+			return ErrBootstrapVerification
+		}
+		digest, size = pairExecutorSHA256, info.Size()
+	}
+	return client.transferPreparationCompletion(ctx, managerPath, digest, size, expected, action, source, postgresReference, sudoPassword, serialized,
 		func(ctx context.Context, output io.Writer) error {
 			if clusterbootstrap.HostPackagePreparationAction(action) {
 				return inputs.WritePrejoinHostPreparation(ctx, expected, *source, material, output, serialized)

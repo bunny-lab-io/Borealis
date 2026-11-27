@@ -226,7 +226,7 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
 		// Hash only after the read returns its connection. Public reservation
 		// stores no ciphertext; final UPDATE compares the exact observed bytes.
 		digest, err := clusterSSHPreparationDigest([]string{credential.generation, credential.ciphertext})
-		if err != nil || digest != work.Authorization.Targets[i].CredentialSHA256 {
+		if err != nil || !pairCredentialMatches(work.Payload, work.Authorization, i, digest) {
 			return fail()
 		}
 		sealed[target.Binding.TargetID] = credential
@@ -250,7 +250,7 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
 	}
 	offset := pairRecoveryOffset(work.Payload)
 	step := "qualification_complete"
-	if offset == 1 {
+	if offset > 0 {
 		if !fenced || qualification.Version != 2 {
 			return fail()
 		}
@@ -274,7 +274,7 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
  RETURNING t.lease_generation`, target.Binding.TargetID, holder, clusterSSHTargetLeaseSeconds,
 			operation.ID, target.Binding.ClusterID, operation.Attempt, target.Binding.Address, target.Binding.Port, target.Key.Algorithm,
 			target.Key.Fingerprint, keys[target.Binding.TargetID], target.Ordinal, target.Generation, target.InspectedAt,
-			reports[target.Binding.TargetID], clusterSSHInspectionLifetimeSeconds, generations[target.Binding.TargetID]+offset, claim.Sealed.generation, claim.Sealed.ciphertext, offset == 1, step).
+			reports[target.Binding.TargetID], clusterSSHInspectionLifetimeSeconds, generations[target.Binding.TargetID]+offset, claim.Sealed.generation, claim.Sealed.ciphertext, offset > 0, step).
 			Scan(&claim.Lease.Generation) != nil {
 			return fail()
 		}
@@ -298,7 +298,7 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
  WHERE t.operation_id=$5 AND (t.state='running' AND t.current_step='stage_source' AND t.lease_holder=$6
  AND t.lease_expires_at>moment.now AND ($9 OR t.inspected_at>moment.now-$8) AND t.inspected_at<=moment.now
  AND p.aegis_generation=a.verification_token AND p.expires_at>moment.now) IS NOT TRUE)`, clusterControllerLeaseName,
-		controller, qualification.ObservedAt, clusterSSHFreshEvidenceSeconds, operation.ID, holder, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds, offset == 1).Scan(&present) != nil {
+		controller, qualification.ObservedAt, clusterSSHFreshEvidenceSeconds, operation.ID, holder, confirmation.ConfirmedAt, clusterSSHInspectionLifetimeSeconds, offset > 0).Scan(&present) != nil {
 		return fail()
 	}
 	if tx.Commit() != nil {

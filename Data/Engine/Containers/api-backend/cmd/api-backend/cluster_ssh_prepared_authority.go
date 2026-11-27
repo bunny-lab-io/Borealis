@@ -189,7 +189,11 @@ func (c *clusterController) observeClusterSSHPrepared(parent context.Context, op
 
 	var nodes map[string]clusterbootstrap.K3sJoinedNode
 	for round := 0; round < 2; round++ {
-		nodes, err = observeClusterSSHJoinedNodes(ctx, runner.kube.getClusterSSHNodeCohortJSON, before.proof.Cohort, before.proof.Source, before.version)
+		observed, err := pairSourceBoot(before.payload, before.proof.Source, true)
+		if err != nil {
+			return clusterSSHPreparedObservation{}, err
+		}
+		nodes, err = observeClusterSSHJoinedNodes(ctx, runner.kube.getClusterSSHNodeCohortJSON, before.proof.Cohort, observed, before.version)
 		if err != nil || len(nodes) != len(before.receipt.Targets) {
 			return fail()
 		}

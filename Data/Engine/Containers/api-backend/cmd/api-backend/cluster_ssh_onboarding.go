@@ -63,6 +63,10 @@ func clearClusterSSHFields(body map[string]json.RawMessage) {
 }
 
 func readClusterSSHSubmission(r *http.Request) (string, []clusterSSHSubmissionTarget, error) {
+	return readClusterSSHSubmissionFor(r, "INSPECT ENGINE NODES")
+}
+
+func readClusterSSHSubmissionFor(r *http.Request, phrase string) (string, []clusterSSHSubmissionTarget, error) {
 	fail := func() (string, []clusterSSHSubmissionTarget, error) {
 		return "", nil, errors.New("invalid SSH inspection request")
 	}
@@ -85,7 +89,7 @@ func readClusterSSHSubmission(r *http.Request) (string, []clusterSSHSubmissionTa
 		return fail()
 	}
 	confirmation, err := clusterSSHString(body, "confirmation", 32, false)
-	if err != nil || confirmation != "INSPECT ENGINE NODES" {
+	if err != nil || confirmation != phrase {
 		return fail()
 	}
 	var encoded []json.RawMessage
@@ -229,6 +233,7 @@ func (service *clusterSSHOnboarding) progress(w http.ResponseWriter, r *http.Req
 		"current_step": result.Step, "attempt": result.Attempt, "targets": result.Targets}
 	if result.StopRequested {
 		payload["stop_requested"] = true
+
 	}
 	if result.Qualification != nil {
 		q := *result.Qualification

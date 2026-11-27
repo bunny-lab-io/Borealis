@@ -123,6 +123,7 @@
       "TestClusterSSHIdentityRecoverySettlementPostgresRejectsChangedAuthority",
       "TestClusterSSHParentPostgresInspectionLifecycle",
       "TestClusterSSHPreparationClaimPostgresAtomicCohort",
+      "TestStoppedPairFreshAccessPostgres",
       "TestClusterSSHPreparationClaimPostgresRechecksAfterWait",
       "TestClusterSSHPreparationControllerPostgresLegacyRouting",
       "TestClusterSSHPreparationControllerPostgresNativeSettlement",

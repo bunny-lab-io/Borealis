@@ -85,8 +85,12 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 		return clusterbootstrap.ErrPreparationConfig
 	}
 	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, authorization, proof.Source)
-	if err != nil || confirmation.IdentitySource != work.IdentitySource {
+	if err != nil || confirmation.IdentitySource != work.IdentitySource || clusterbootstrap.CheckPairExecutorPlan(confirmation.OperationID, confirmation.PlanSHA256) != nil {
 		return clusterbootstrap.ErrPreparationConfig
+	}
+	observedSource, err := pairSourceBoot(work.Payload, proof.Source, true)
+	if err != nil {
+		return err
 	}
 	digest := sha256.Sum256([]byte(work.Payload))
 	payloadHash := hex.EncodeToString(digest[:])
@@ -97,7 +101,7 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 		if !validClusterSSHPreparationLease(claim.Lease) || claim.Lease.OperationID != proof.Cohort.OperationID ||
 			claim.Lease.OperationAttempt != proof.Cohort.Attempt || claim.Lease.ControllerHolder != proof.Cohort.ControllerHolder ||
 			claim.Lease.TargetID != target.Binding.TargetID || claim.Lease.Generation != reserved.QualificationGeneration+1+pairRecoveryOffset(work.Payload) ||
-			claim.Sealed.binding != target.Binding || err != nil || credentialHash != reserved.CredentialSHA256 {
+			claim.Sealed.binding != target.Binding || err != nil || !pairCredentialMatches(work.Payload, authorization, i, credentialHash) {
 			return clusterbootstrap.ErrPreparationConfig
 		}
 		read := newClusterSSHPreparationAuthorityRead(w.store, w.aegis, claim.Lease, work.Baseline, claim.Sealed)
@@ -107,7 +111,7 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 			stable.ObservedAt, inspected.ObservedAt = 0, 0
 			if err != nil || value.IdentitySource == nil || *value.IdentitySource != work.IdentitySource || value.Lease != claim.Lease || value.Baseline != work.Baseline || value.Recovery != nil ||
 				value.payload != work.Payload || value.PayloadSHA256 != payloadHash || value.K3sVersion != version ||
-				value.Queue != work.Source || !reflect.DeepEqual(value.Source, proof.Source) || !reflect.DeepEqual(stable, inspected) {
+				value.Queue != work.Source || !reflect.DeepEqual(value.Source, observedSource) || !reflect.DeepEqual(stable, inspected) {
 				return clusterSSHPreparationAuthority{}, clusterbootstrap.ErrSessionAuthority
 			}
 			return value, nil
@@ -126,7 +130,10 @@ func (w *clusterSSHPreparationWorker) prepare(parent context.Context, work clust
 	prepared := make([]clusterSSHPrejoinCompletion, len(claims))
 	maximum := clusterSSHPreparationWorkerBudget(w.prejoin != nil || w.cohort != nil, len(claims))
 	if _, err := pairReport(work.Payload); err == nil {
-		hardLimit := time.Unix(confirmation.ConfirmedAt, 0).Add(maximum)
+		hardLimit, err := pairExecutionDeadline(work.Payload, confirmation, maximum, time.Now())
+		if err != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
 		var cancel context.CancelFunc
 		parent, cancel = context.WithDeadline(parent, hardLimit)
 		defer cancel()

@@ -433,6 +433,9 @@ func (c *clusterController) runOnce(ctx context.Context) error {
 	c.store.db.SetMaxIdleConns(c.maxIdleConnections)
 	defer leaseGuard.Close()
 	runCtx := leaseGuard.Context()
+	if clusterbootstrap.IsPairExecutor() {
+		return c.runReservedPair(runCtx)
+	}
 	if err := c.pruneSourceStage(runCtx); err != nil {
 		return err
 	}
@@ -1428,7 +1431,7 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
 	}
 	var operation clusterControllerOperation
 	var targetNodeID, targetRelease, targetSHA, payloadJSON string
-	err = tx.QueryRowContext(ctx, `
+	query := `
 		SELECT o.id, o.kind, o.state, o.current_step,
 		       COALESCE(o.target_node_id,''), COALESCE(o.target_release,''), COALESCE(o.target_sha,''), o.payload_json, o.attempt
 		  FROM engine.cluster_operations o
@@ -1452,8 +1455,19 @@ func (c *clusterController) claimOperation(ctx context.Context) (clusterControll
              AND NOT(o.payload_json::jsonb ? 'ssh_preparation_request'))
            AND NOT (o.kind='ssh_onboarding' AND o.current_step='recover_ssh_preparation')
 		   AND NOT (o.kind='ssh_onboarding' AND COALESCE(o.error_text,'') IN ($1,$2))
-		 FOR UPDATE OF o SKIP LOCKED
-	`, clusterSSHPreparedAdmissionRunning, clusterSSHPreparedAdmissionBlocked).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
+		 `
+	args := []any{clusterSSHPreparedAdmissionRunning, clusterSSHPreparedAdmissionBlocked}
+	if clusterbootstrap.IsPairExecutor() {
+		pin, err := clusterbootstrap.RecoveryPair()
+		if err != nil {
+			return operation, false, err
+		}
+		query += ` AND o.id=$3 AND o.kind='ssh_onboarding' AND o.state='running' AND c.hmr_state='inactive'
+ AND o.current_step IN ('prepare_ssh_targets','apply_membership','verify_quorum') AND coalesce(o.error_text,'')=''
+ AND o.payload_json::jsonb#>>'{ssh_pair_resume,plan_sha256}'=$4 AND o.payload_json::jsonb#>>'{ssh_preparation_authorization,controller_holder}'=$5`
+		args = append(args, pin.Operation, pin.Plan, c.holder)
+	}
+	err = tx.QueryRowContext(ctx, query+" FOR UPDATE OF o SKIP LOCKED", args...).Scan(&operation.ID, &operation.Kind, &operation.State, &operation.CurrentStep, &targetNodeID, &targetRelease, &targetSHA, &payloadJSON, &operation.Attempt)
 	if errors.Is(err, sql.ErrNoRows) {
 		return clusterControllerOperation{}, false, nil
 	}
@@ -4779,4 +4793,25 @@ func (r *kubernetesClusterStepRunner) recordClusterIntent(ctx context.Context, o
 		operation.State = "running"
 	}
 	return r.reconcileOperationResource(ctx, clusterControllerOperationResource{Operation: operation}, time.Now().UTC().Unix())
+}
+
+// The patched, same-UID controller Pod still acquires its usual lease. Run
+// only the reserved operation and keep the original serving deployment intact.
+func (c *clusterController) runReservedPair(ctx context.Context) error {
+	op, ok, err := c.claimOperation(ctx)
+	if err != nil || !ok {
+		return err
+	}
+	runner, ok := c.runner.(*kubernetesClusterStepRunner)
+	if !ok || runner.kube == nil {
+		return errClusterUnavailable
+	}
+	switch op.CurrentStep {
+	case clusterSSHPreparationOperationStep:
+		return c.runSSHPreparationParent(ctx, op, runner.kube.getJSON)
+	case "apply_membership", "verify_quorum":
+		return c.runSSHPreparedAdmissionParent(ctx, op)
+	default:
+		return errClusterConflict
+	}
 }

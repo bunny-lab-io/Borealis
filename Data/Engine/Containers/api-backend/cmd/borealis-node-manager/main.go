@@ -72,6 +72,13 @@ func main() {
 	if len(os.Args) < 2 {
 		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
 	}
+	if clusterbootstrap.IsPairExecutor() {
+		switch os.Args[1] {
+		case "bootstrap-source-session", "bootstrap-source-session-contained", "bootstrap-artifact-session", "bootstrap-artifact-session-contained":
+		default:
+			fatalf("pair recovery executor only supports supervised preparation")
+		}
+	}
 	switch os.Args[1] {
 	case "external-image-proof":
 		if externalImageArchiveProof(os.Args[2:]) != nil {

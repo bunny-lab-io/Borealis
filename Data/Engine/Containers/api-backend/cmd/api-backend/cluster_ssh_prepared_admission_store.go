@@ -71,7 +71,7 @@ func readClusterSSHPreparedStoreBinding(ctx context.Context, db *sql.DB, a clust
 			return fail()
 		}
 		digest, err := clusterSSHPreparationDigest([]string{b.credentials[i][0], b.credentials[i][1]})
-		if err != nil || digest != owned.authorization.Targets[i].CredentialSHA256 || ctx.Err() != nil {
+		if err != nil || !pairCredentialMatches(owned.payload, owned.authorization, i, digest) || ctx.Err() != nil {
 			return fail()
 		}
 	}

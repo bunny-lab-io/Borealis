@@ -109,6 +109,10 @@ func readClusterSSHPreparedMembershipNodesForPhase(ctx context.Context, getJSON 
 	if getJSON == nil || !clusterSSHPreparedAuthorityPhase(phase) {
 		return fail()
 	}
+	observed, err := pairSourceBoot(a.payload, a.proof.Source, true)
+	if err != nil {
+		return fail()
+	}
 	var parseTarget func([]byte, clusterSSHInspectedTarget) (clusterbootstrap.K3sJoinedNode, error)
 	if phase != clusterSSHPreparationOperationStep {
 		parseTarget = func(raw []byte, target clusterSSHInspectedTarget) (clusterbootstrap.K3sJoinedNode, error) {
@@ -146,7 +150,7 @@ func readClusterSSHPreparedMembershipNodesForPhase(ctx context.Context, getJSON 
 			return err
 		}
 		return json.Unmarshal(raw, out)
-	}, a.proof.Cohort, a.proof.Source, a.version, parseTarget)
+	}, a.proof.Cohort, observed, a.version, parseTarget)
 	if err != nil || len(targets) != len(a.receipt.Targets) {
 		return fail()
 	}
@@ -189,7 +193,7 @@ func readClusterSSHPreparedMembershipNodesForPhase(ctx context.Context, getJSON 
 				node = value
 			}
 		}
-		for _, source := range a.proof.Source.Members {
+		for _, source := range observed.Members {
 			if source.Name == name {
 				info := clusterSSHStorageMap(status, "nodeInfo")
 				if !clusterNativeObservationFieldNames(info, "kubeletVersion", "architecture", "operatingSystem") || info["kubeletVersion"] != a.version || info["architecture"] != "amd64" || info["operatingSystem"] != "linux" {

@@ -68,6 +68,15 @@ Start on the original Engine. Complete **Enable cluster** separately if the Engi
 
 **End inspection** releases the pair before installation. **Stop installation** revokes further execution. If a host may already have changed, the operation retains both reservations and its journal evidence. Inspect the reported checkpoint and actual membership before recovery. Preserve the original Engine, target journals and shared identity during an interruption.
 
+??? note "Recovering a stopped development pair across an executor correction"
+    Keep both hosts reserved. Record the stopped operation, frozen plan, baseline, controller, database system identifier, source Node UID and boot, target boot IDs, fencing generations and retained journal digest. Verify the original database backup, Aegis identity and current cluster health. A persistent datastore stall or unstable VIP blocks live recovery.
+
+    For the development qualification, the operator can authorize one matched recovery package for that pair. An approved Engine01 reboot requires an explicit handoff from the recorded boot to the verified current boot. The serving API, WebUI, installation catalog and original database continue to use the frozen baseline. The temporary correction runs only the original controller’s onboarding work and one worker inside the original API Pod.
+
+    Sign in to the original WebUI with MFA. The recovery worker accepts that administrator session, the original Aegis Cipher and fresh pinned SSH access for both reserved hosts through its private input. Confirm **RESUME ENGINE NODES** for the existing pair. The first target must retain its verified source and runtime account checkpoints; the second must still have no journal. Recovery verifies both hosts before granting fresh access. The normal supervised preparation worker then acquires higher fences and reconciles actual effects.
+
+    If activation or a claim is interrupted, retain the Pod identities, operation, package and journals. Inspect the actual controller executable, grant, leases and target evidence before another attempt. Preserve the baseline controller image for restoration after paired admission and the five-minute healthy soak. A standard Engine update is a separate operation.
+
 The replacement workflow retains its surviving-source selection and readiness checks. The paired workflow still needs live qualification on the integration candidate. [Clustering tracker](https://github.com/bunny-lab-io/Borealis/issues/530)
 
 ### Set Controller Resource Bounds
@@ -810,6 +819,15 @@ Before upgrading from a release without this ownership protocol, let active work
 ## Detailed Implementation Reference
 
 ??? example "Detailed Codex Breakdown"
+
+    ### Stopped-pair development recovery
+
+    - `Data/Engine/K3s/cluster/build-pair-executors.py COMMIT CATALOG PIN_JSON NEW_OUTPUT` builds from the specified Git tree with Go 1.25.12 and rootless Podman. The pin contains the operation, plan, dev release, ordered target IDs, new generation, original catalog manager digest and `source_boot` (source UID, previous and authorized boot IDs, database system ID and original journal digest). Review the exact commit, pins, base image, executor hashes, exported image and recovery manifest hash together. The build does not change the catalog.
+    - Following explicit live authorization, transfer the package by pinned SSH. On the original Engine, `activate-pair-executors.py PACKAGE --approved-manifest-sha256 DIGEST` stages the executors in a private directory in the original API Pod, runs the stopped-custody check there, and compares the source Node and kube-system namespace. It imports the pinned controller image and patches only the existing controller **Pod** by UID, resource version and previous image. Preserving the Pod name preserves the controller lease identity. Its Deployment template and serving API image retain the baseline. Recheck the running binary digest and the stopped custody after the container restarts.
+    - The approved invocation is `k3s kubectl -n borealis exec -i API_POD -c api-backend -- PRIVATE_DIRECTORY/pair-worker pair-recovery-worker`. Supply a bounded JSON object on private stdin containing `session` (an existing WebUI login), `cipher` and `submission` (the normal pinned two-target SSH submission with the original operation ID and the exact resume confirmation). Keep all input in memory and out of shell arguments, files and evidence. A committed grant is a durable boundary. A failed or missing response requires inspection of the stored grant, target leases and actual journals.
+    - `cluster_ssh_pair_resume.go` records the fresh credential digests, database authorization time and explicit boot handoff separately from the original preparation authorization. `internal/clusterbootstrap/pair_executor.go` binds the corrected executor to the approved pair and dev catalog. The worker pins its matched helper; the receiver verifies its running binary and independently verifies the original helper in the unchanged archive. Fresh source observations use the approved new boot. Installation and receipt hashes continue to use the original source boot. A third boot rejects.
+    - After verified completion and soak, restore the baseline controller image using the same Pod UID and image compare-and-swap, or verify that its unchanged template has already restored it. Confirm the serving controller, membership, API and database before disposing of the temporary files. Keep the recovery package and evidence for review. Any ambiguous effect retains custody and requires a separate decision.
+
 
     ### SSH pair expansion implementation
 

@@ -593,6 +593,10 @@ func dispatchClusterSSHPrejoinPhase(parent context.Context, connect func(context
 	absent := func(c clusterSSHPrejoinClient, e clusterbootstrap.PreparationExpected, sudo []byte) error {
 		return c.ReconcilePreparationAbsent(checkCtx, inputs, e, sudo, check)
 	}
+	if phase == prepareBeforeJoin && clusterbootstrap.CheckPairExecutorCursor(expected.Target.TargetID, progress.Step) != nil {
+		reportClusterSSHPrejoinCheck(checkCtx, "retained pair journal checkpoint differs from recovery authorization")
+		return clusterbootstrap.ErrMutationUnknown
+	}
 	if progress.Step == "source_absent" {
 		// The receiver admits this cursor only for a strictly newer claim.
 		// Repeat actual absence proof before clean no-replace publication.
