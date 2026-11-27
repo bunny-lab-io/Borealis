@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"slices"
 	"strings"
+	"time"
 )
 
 // This reservation is written only by the guarded controller approval transition,
@@ -201,6 +202,19 @@ func (s *postgresOperatorStore) claimSSHPreparation(ctx context.Context, operati
 	confirmation, err := parseClusterSSHPreparationConfirmation(confirmationRaw, work.Authorization, work.Proof.Source)
 	if err != nil {
 		return fail()
+	}
+	if pairRecoveryOffset(work.Payload) == 2 {
+		if _, err := pairExecutionDeadline(work.Payload, confirmation, clusterSSHPreparationWorkerBudget(true, len(work.Authorization.Targets)), time.Now()); err != nil {
+			return fail()
+		}
+	}
+	if clusterbootstrap.IsPairExecutor() {
+		if pairRecoveryOffset(work.Payload) != 2 || clusterbootstrap.CheckPairExecutorPlan(operation.ID, confirmation.PlanSHA256) != nil {
+			return fail()
+		}
+		if _, err := pairSourceBoot(work.Payload, work.Proof.Source, true); err != nil {
+			return fail()
+		}
 	}
 	work.IdentitySource = confirmation.IdentitySource
 	targets := slices.Clone(work.Proof.Cohort.Targets)

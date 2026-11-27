@@ -2,7 +2,7 @@
   {
     "pattern": "/",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 183,
+    "line": 204,
     "class": "fallback",
     "authentication": "shared-public-gate",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -479,7 +479,7 @@
   {
     "pattern": "/api/system/go-backend/status",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 133,
+    "line": 154,
     "class": "operator-api",
     "authentication": "operator-session",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -542,7 +542,7 @@
   {
     "pattern": "/health",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 129,
+    "line": 150,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/main_test.go",
@@ -569,7 +569,7 @@
   {
     "pattern": "/live",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 131,
+    "line": 152,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go",
@@ -587,7 +587,7 @@
   {
     "pattern": "/ready",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 132,
+    "line": 153,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go",
@@ -605,7 +605,7 @@
   {
     "pattern": "/startup",
     "source": "Data/Engine/Containers/api-backend/cmd/api-backend/main.go",
-    "line": 130,
+    "line": 151,
     "class": "health",
     "authentication": "none",
     "test": "Data/Engine/Containers/api-backend/cmd/api-backend/probe_contracts_test.go",

@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -486,6 +487,15 @@ func (client *Client) transferPreparationCompletion(parent context.Context, mana
 	info, err := manager.Stat()
 	if err != nil || !info.Mode().IsRegular() || size < 1 || size > clusterbootstrap.MaxBundleBytes || info.Size() != size {
 		return ErrBootstrapVerification
+	}
+	if clusterbootstrap.IsPairExecutor() {
+		hash := sha256.New()
+		if n, err := io.CopyN(hash, manager, size); err != nil || n != size || hex.EncodeToString(hash.Sum(nil)) != digest {
+			return ErrBootstrapVerification
+		}
+		if _, err := manager.Seek(0, io.SeekStart); err != nil {
+			return ErrBootstrapVerification
+		}
 	}
 	advance("ssh_session")
 	session, err := client.ssh.NewSession()

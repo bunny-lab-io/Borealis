@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-
 	"io"
 	"net/http"
 	"os"
@@ -24,9 +23,10 @@ func runPairRecoveryWorker(ctx context.Context, cfg gatewayConfig, r io.Reader) 
 		return err
 	}
 	var input struct {
-		Session    string          `json:"session"`
-		Cipher     string          `json:"cipher"`
-		Submission json.RawMessage `json:"submission"`
+		ClaimCommitted bool            `json:"claim_committed,omitempty"`
+		Session        string          `json:"session"`
+		Cipher         string          `json:"cipher"`
+		Submission     json.RawMessage `json:"submission"`
 	}
 	const limit = clusterSSHQueueBodyMaxBytes + 32768
 	data, err := io.ReadAll(io.LimitReader(r, limit+1))
@@ -37,7 +37,7 @@ func runPairRecoveryWorker(ctx context.Context, cfg gatewayConfig, r io.Reader) 
 	defer clear(data)
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
-	if dec.Decode(&input) != nil || dec.Decode(&struct{}{}) != io.EOF || len(input.Cipher) > 4096 || input.Session == "" || len(input.Session) > 16384 || len(input.Submission) == 0 {
+	if dec.Decode(&input) != nil || dec.Decode(&struct{}{}) != io.EOF || len(input.Cipher) > 4096 || input.Session == "" || len(input.Session) > 16384 || input.ClaimCommitted == (len(input.Submission) != 0) {
 		return errClusterConflict
 	}
 	defer clear(input.Submission)
@@ -80,7 +80,11 @@ func runPairRecoveryWorker(ctx context.Context, cfg gatewayConfig, r io.Reader) 
 	if worker == nil || !worker.ready() {
 		return errors.New("original source worker unavailable")
 	}
-	if err := grantPairRecovery(req, auth, store, aegis, pin); err != nil {
+	if input.ClaimCommitted {
+		if _, failure := requireAdmin(ctx, auth, req); failure != nil {
+			return errors.New("existing WebUI administrator session rejected")
+		}
+	} else if err := grantPairRecovery(req, auth, store, aegis, pin); err != nil {
 		return err
 	}
 	req.Header.Del("Authorization")
@@ -131,4 +135,16 @@ FROM engine.cluster_onboarding_targets t WHERE t.id=$1 AND t.operation_id=$2 AND
 		}
 	}
 	return json.NewEncoder(out).Encode(map[string]string{"operation": pin.Operation, "plan": pin.Plan, "node": p.proof.Source.Members[0].Name, "node_uid": pin.Boot.SourceUID, "boot": pin.Boot.After, "namespace_uid": p.proof.Source.KubeSystemUID, "controller": p.approval.ControllerHolder, "baseline": p.source.SHA})
+}
+
+func openPairControllerStore(cfg gatewayConfig) (operatorStore, func(), error) {
+	if clusterbootstrap.IsPairExecutor() {
+		// The reserved pair runs against the original, already-installed schema.
+		db, err := openPostgresPool(cfg, true)
+		if err != nil {
+			return nil, nil, err
+		}
+		return &postgresOperatorStore{db: db}, func() { _ = db.Close() }, nil
+	}
+	return openControlOperatorStore(cfg)
 }

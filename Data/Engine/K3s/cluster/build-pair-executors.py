@@ -9,6 +9,7 @@ from pathlib import Path
 import re
 import subprocess
 import tempfile
+import tarfile
 
 
 def digest(path):
@@ -74,16 +75,25 @@ def main():
         subprocess.run(["podman", "load", "-i", str(archive)], check=True)
         if output("podman", "image", "inspect", "--format", "{{.Digest}}", image["image"]) != image["manifest_digest"]:
             parser.error("loaded original image digest mismatch")
-        tag = "localhost/borealis-pair-controller:" + digest(dest / "pair-worker")[:24]
+        repository = image["image"].rsplit(":", 1)[0]
+        tag = repository + ":pair-recovery-" + digest(dest / "pair-worker")[:24]
         recipe = src / "Containerfile"
-        recipe.write_text("FROM " + image["image"].split(":")[0] + "@" + image["manifest_digest"] +
+        recipe.write_text("FROM " + image["image"].rsplit(":", 1)[0] + "@" + image["manifest_digest"] +
                           "\nCOPY --chmod=0755 pair-worker /usr/local/bin/borealis-cluster-controller\n")
         subprocess.run(["podman", "build", "--network=none", "--pull=never", "--memory=2g", "--cpu-quota=300000",
                         "-f", str(recipe), "-t", tag, str(dest)], check=True)
         subprocess.run(["podman", "save", "--format=oci-archive", "-o", str(dest / "controller.oci.tar"), tag], check=True)
-        image_digest = output("podman", "image", "inspect", "--format", "{{.Digest}}", tag)
-    record = {"commit": commit, "pin": pin, "base_image": image["image"].split(":")[0] + "@" + image["manifest_digest"],
-              "controller_image": tag.split(":")[0] + "@" + image_digest,
+        # Export may change compression and therefore the manifest digest.
+        # containerd consumes the exported OCI index, not Podman's storage digest.
+        with tarfile.open(dest / "controller.oci.tar") as tar:
+            manifest, = json.load(tar.extractfile("index.json"))["manifests"]
+            image_digest = manifest["digest"]
+            if (not re.fullmatch(r"sha256:[0-9a-f]{64}", image_digest)
+                    or manifest["annotations"].get("org.opencontainers.image.ref.name") != tag
+                    or hashlib.sha256(tar.extractfile("blobs/sha256/" + image_digest[7:]).read()).hexdigest() != image_digest[7:]):
+                parser.error("exported controller image identity mismatch")
+    record = {"commit": commit, "pin": pin, "base_image": image["image"].rsplit(":", 1)[0] + "@" + image["manifest_digest"],
+              "controller_image": repository + "@" + image_digest,
               "sha256": {name: digest(dest / name) for name in ("pair-worker", "pair-node-manager", "controller.oci.tar")}}
     (dest / "recovery.json").write_text(json.dumps(record, indent=2) + "\n")
 

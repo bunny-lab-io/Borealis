@@ -86,6 +86,7 @@ def main():
     uid = pod["metadata"]["uid"]
     container, = pod["spec"]["containers"]
     if (pod["metadata"].get("deletionTimestamp") is not None or pod["spec"]["nodeName"] != host
+            or container.get("imagePullPolicy") not in ("IfNotPresent", "Never")
             or container["name"] != "controller" or container["command"] != ["/usr/local/bin/borealis-cluster-controller"]
             or container["image"] not in (rec["base_image"], rec["controller_image"])):
         parser.error("original controller Pod or executable differs")
@@ -104,8 +105,13 @@ def main():
             parser.error("controller custody changed during activation")
         statuses = latest["status"].get("containerStatuses", [])
         if len(statuses) == 1 and statuses[0].get("ready"):
-            binary = kubectl("-n", "borealis", "exec", name, "-c", "controller", "--", "sha256sum",
-                             "/usr/local/bin/borealis-cluster-controller").decode().split()[0]
+            try:
+                binary = kubectl("-n", "borealis", "exec", name, "-c", "controller", "--", "sha256sum",
+                                 "/usr/local/bin/borealis-cluster-controller").decode().split()[0]
+            except subprocess.CalledProcessError:
+                # The old container can exit between the status read and exec.
+                time.sleep(2)
+                continue
             if binary == rec["sha256"]["pair-worker"] and json.loads(api_exec(worker, "pair-recovery-check")) == proof:
                 print("Recovery controller ready", uid, "operation remains stopped", proof["operation"])
                 return

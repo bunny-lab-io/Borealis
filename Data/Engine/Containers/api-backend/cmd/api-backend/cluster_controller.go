@@ -295,7 +295,7 @@ func clusterControllerMode() bool {
 }
 
 func runClusterController(ctx context.Context, cfg gatewayConfig) error {
-	operatorStore, closeStore, err := openControlOperatorStore(cfg)
+	operatorStore, closeStore, err := openPairControllerStore(cfg)
 	if err != nil {
 		return err
 	}
