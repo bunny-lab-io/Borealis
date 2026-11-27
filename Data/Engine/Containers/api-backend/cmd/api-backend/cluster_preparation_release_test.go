@@ -232,7 +232,9 @@ func testPreparationReleasePhaseBinding(t *testing.T) {
 func testInspectionReleaseStaging(t *testing.T) {
 	f := newSSHQualificationFixture(t, false)
 	s := f.c.store
-	f.exec(t, `UPDATE engine.cluster_operations SET error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStagePending)
+	// A pair created before the pivot retains its explicit staging contract.
+	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=(payload_json::jsonb || '{"ssh_source_staging_required":true}'::jsonb)::text,
+ error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStagePending)
 	work, err := s.claimClusterSSHQualification(f.ctx, f.op.ID, newClusterUUID())
 	if err != nil {
 		t.Fatal(err)
@@ -305,7 +307,7 @@ func testInspectionReleaseStaging(t *testing.T) {
 }
 
 func testReserveDuringSourceStaging(t *testing.T) {
-	f := newSSHQualificationFixture(t, false)
+	f := newSSHQualificationFixture(t, true)
 	s := f.c.store
 	f.exec(t, `UPDATE engine.cluster_operations SET error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStagePending)
 	// The production polling entry point must return while staging even when
@@ -315,8 +317,8 @@ func testReserveDuringSourceStaging(t *testing.T) {
 		t.Fatal(err)
 	}
 	var reserved int
-	if err := s.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=$1 AND state='running' AND current_step='qualify'`, f.op.ID).Scan(&reserved); err != nil || reserved != 2 {
-		t.Fatal("missing fresh paired reservation", reserved, err)
+	if err := s.db.QueryRowContext(f.ctx, `SELECT count(*) FROM engine.cluster_onboarding_targets WHERE operation_id=$1 AND state='running' AND current_step='qualify'`, f.op.ID).Scan(&reserved); err != nil || reserved != 1 {
+		t.Fatal("missing replacement reservation", reserved, err)
 	}
 	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET lease_expires_at=1 WHERE operation_id=$1`, f.op.ID)
 	if id, err := s.pendingClusterSSHQualification(f.ctx); err != nil || id != "" {

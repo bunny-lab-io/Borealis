@@ -15,7 +15,11 @@ func newSSHQualificationFixture(t *testing.T, replacement bool) sshPreparationAu
 	f := newSSHPreparationAuthorityFixtureForTopology(t, replacement)
 	// Reuse the real controller-produced inspection proof, returning only the
 	// isolated fixture's reserved preparation rows to their original wait.
-	f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets',error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStageReady)
+	stage := ""
+	if replacement {
+		stage = clusterSSHStageReady
+	}
+	f.exec(t, `UPDATE engine.cluster_operations SET state='waiting',current_step='qualify_ssh_targets',error_text=$2 WHERE id=$1`, f.op.ID, stage)
 	f.exec(t, `UPDATE engine.cluster_onboarding_targets SET state='queued',current_step='inspection_complete',lease_holder='',lease_expires_at=0,lease_generation=inspected_generation WHERE operation_id=$1`, f.op.ID)
 	return f
 }
@@ -34,6 +38,9 @@ func TestClusterSSHQualificationPostgresReadOnlyLifecycle(t *testing.T) {
 			work, err := s.claimClusterSSHQualification(f.ctx, id, newClusterUUID())
 			if err != nil || len(work.Claims) != len(f.targets) {
 				t.Fatal("claim", err)
+			}
+			if ready, err := s.inspectionReleaseReady(f.ctx, work); err != nil || !ready {
+				t.Fatal("inspection could not start under its release staging contract", err)
 			}
 			for _, claim := range work.Claims {
 				if !validClusterSSHObservationLease(claim.Lease) || validClusterSSHPreparationLease(claim.Lease) {
@@ -280,7 +287,8 @@ func TestClusterSSHQualificationPostgresOriginalBudgetOnReclaim(t *testing.T) {
 		f.exec(t, "UPDATE engine.cluster_onboarding_targets SET inspected_at=$2 WHERE operation_id=$1", f.op.ID, at)
 	}
 	backdate(45 * time.Minute)
-	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=(payload_json::jsonb || '{"ssh_source_staging_required":true}'::jsonb)::text WHERE id=$1`, f.op.ID)
+	f.exec(t, `UPDATE engine.cluster_operations SET payload_json=(payload_json::jsonb || '{"ssh_source_staging_required":true}'::jsonb)::text,
+ error_text=$2 WHERE id=$1`, f.op.ID, clusterSSHStageReady)
 	old := work.Claims[0]
 	if _, err := store.loadClusterSSHPreparationAuthority(f.ctx, old.Lease, work.Baseline, old.Sealed); err != nil {
 		t.Fatal("active qualification expired at the old thirty-minute boundary", err)
