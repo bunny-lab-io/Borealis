@@ -1,5 +1,7 @@
 import hashlib
 import importlib.util
+import os
+import subprocess
 from pathlib import Path
 import tempfile
 import unittest
@@ -25,6 +27,33 @@ class StandaloneHostTests(unittest.TestCase):
                 available.add(meta["name"])
             elif "namespace" in meta:
                 self.assertIn(meta["namespace"], available)
+
+    def test_acme_store_fresh_existing_and_linked(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            state = Path(tmp) / "Services/traefik-edge/state"
+            state.mkdir(parents=True)
+            store = state / "acme.json"
+            def prepare():
+                return subprocess.run(
+                    ["bash", "-c", 'source "$1/Engine.sh"; RUNTIME_ROOT=$2; ensure_traefik_acme_storage "$3" "$4"',
+                     "bash", str(ROOT), tmp, str(os.getuid()), str(os.getgid())],
+                    env={**os.environ, "BOREALIS_ENGINE_LIBRARY_MODE": "1"}, capture_output=True)
+            self.assertEqual(prepare().returncode, 0)
+            self.assertEqual(store.stat().st_mode & 0o777, 0o600)
+            store.write_bytes(b"existing fixture")
+            store.chmod(0o640)
+            self.assertEqual(prepare().returncode, 0)
+            self.assertEqual(store.read_bytes(), b"existing fixture")
+            self.assertEqual(store.stat().st_mode & 0o777, 0o600)
+            other = state / "other"
+            store.rename(other)
+            other.chmod(0o640)
+            store.symlink_to(other)
+            self.assertNotEqual(prepare().returncode, 0)
+            store.unlink()
+            os.link(other, store)
+            self.assertNotEqual(prepare().returncode, 0)
+            self.assertEqual(other.stat().st_mode & 0o777, 0o640)
 
     def test_exact_policy_delta(self):
         self.assertEqual((policy.ASSETS / "wg-quick.local").read_text().splitlines(), [

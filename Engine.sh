@@ -7853,6 +7853,31 @@ apply_traefik_dynamic_config_permissions() {
   chmod 0775 "${dynamic_dir}" 2>/dev/null || true
 }
 
+ensure_traefik_acme_storage() {
+  # Traefik starts as root. Create the store first so the backup API can read it at 0600.
+  python3 -I - "$RUNTIME_ROOT/Services/traefik-edge/state" "$1" "$2" <<'PYTHON'
+import os
+import stat
+import sys
+
+directory, uid, gid = sys.argv[1:]
+parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    flags = os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open("acme.json", flags, 0o600, dir_fd=parent)
+    try:
+        state = os.fstat(fd)
+        if not stat.S_ISREG(state.st_mode) or state.st_nlink != 1:
+            raise SystemExit("ACME storage must be a regular file with a single link")
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, int(uid), int(gid))
+    finally:
+        os.close(fd)
+finally:
+    os.close(parent)
+PYTHON
+}
+
 apply_runtime_service_ownership() {
   local owner_uid
   local owner_gid
@@ -7865,6 +7890,10 @@ apply_runtime_service_ownership() {
   [[ "${owner_uid}" =~ ^[0-9]+$ && "${owner_gid}" =~ ^[0-9]+$ ]] || return 0
   [[ "${postgres_uid}" =~ ^[0-9]+$ && "${postgres_gid}" =~ ^[0-9]+$ ]] || return 0
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || return 0
+
+  if [[ -d "${RUNTIME_ROOT}/Services/traefik-edge/state" ]]; then
+    ensure_traefik_acme_storage "${owner_uid}" "${owner_gid}" || die "Could not prepare private Traefik ACME storage."
+  fi
 
   local path
   for path in \
@@ -7915,11 +7944,6 @@ apply_runtime_service_ownership() {
   chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic/core.yml" 2>/dev/null || true
   chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/traefik-edge/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
-  if [[ -e "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" ]]; then
-    # Keep Traefik ACME storage 0600 while allowing api-backend backup export to read it.
-    chown "${owner_uid}:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
-    chmod 0600 "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
-  fi
 }
 
 apply_deploy_env_file_permissions() {
