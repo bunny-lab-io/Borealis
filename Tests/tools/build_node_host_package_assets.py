@@ -29,6 +29,9 @@ from node_artifact_cache import pinned_input, regular_reader
 LOCK = "Data/Engine/Containers/api-backend/internal/clusterbootstrap/host_packages.lock.json"
 INVENTORY = "borealis-node-host-packages-ubuntu-noble-linux-amd64.json"
 ARCHIVE = "borealis-node-host-packages-ubuntu-noble-linux-amd64.tar"
+RESOLUTE_LOCK = LOCK.replace(".lock.json", ".resolute.lock.json")
+RESOLUTE_INVENTORY = INVENTORY.replace("noble", "resolute")
+RESOLUTE_ARCHIVE = ARCHIVE.replace("noble", "resolute")
 ROOTS = {
     "python3": "base", "ca-certificates": "base", "curl": "base", "gnupg": "base",
     "iptables": "base", "open-iscsi": "base", "nfs-common": "base",
@@ -97,7 +100,7 @@ def archive_size(packages: list[dict]) -> int:
     return ((size + 10239) // 10240) * 10240
 
 
-def valid_url(pin: dict) -> bool:
+def valid_url(pin: dict, suite="noble") -> bool:
     raw = pin["url"]
     url = urllib.parse.urlsplit(raw)
     if (len(raw) > 2048 or url.scheme != "https" or url.netloc not in ("archive.ubuntu.com", "download.docker.com") or
@@ -111,7 +114,7 @@ def valid_url(pin: dict) -> bool:
         return False
     if url.netloc == "archive.ubuntu.com":
         return len(parts) == 6 and parts[:2] == ["ubuntu", "pool"] and parts[2] in ("main", "universe", "restricted", "multiverse")
-    return len(parts) == 8 and parts[:7] == ["linux", "ubuntu", "dists", "noble", "pool", "stable", "amd64"]
+    return len(parts) == 8 and parts[:7] == ["linux", "ubuntu", "dists", suite, "pool", "stable", "amd64"]
 
 
 def parse_plan(raw: bytes) -> tuple[dict, str]:
@@ -122,7 +125,7 @@ def parse_plan(raw: bytes) -> tuple[dict, str]:
     plan = json.loads(raw, object_pairs_hook=unique_object)
     if (not isinstance(plan, dict) or set(plan) != {"version", "os", "os_version", "suite", "platform", "packages", "data_directories"} or
             type(plan["version"]) is not int or plan["version"] != 1 or plan["os"] != "ubuntu" or
-            plan["os_version"] != "24.04" or plan["suite"] != "noble" or plan["platform"] != "linux-amd64" or
+            (plan["os_version"], plan["suite"]) not in (("24.04", "noble"), ("26.04", "resolute")) or plan["platform"] != "linux-amd64" or
             not isinstance(plan["packages"], list) or not len(ROOTS) <= len(plan["packages"]) <= 256):
         raise ValueError("unsupported host package plan")
     validate_directories(plan["data_directories"])
@@ -135,7 +138,7 @@ def parse_plan(raw: bytes) -> tuple[dict, str]:
                 not re.fullmatch(r"[0-9][A-Za-z0-9.+:~\-]{0,199}", p["version"]) or
                 p["architecture"] not in ("amd64", "all") or p["phase"] not in ("base", "docker") or
                 not re.fullmatch(r"[a-z0-9][A-Za-z0-9.+:%_~\-]{0,95}\.deb", p["file"]) or p["file"] in files or
-                not re.fullmatch(r"[0-9a-f]{64}", p["sha256"]) or p["sha256"] == "0" * 64 or not valid_url(p) or
+                not re.fullmatch(r"[0-9a-f]{64}", p["sha256"]) or p["sha256"] == "0" * 64 or not valid_url(p, plan["suite"]) or
                 any(type(p[k]) is not int for k in ("size", "file_bytes", "entries")) or
                 not 0 < p["size"] <= MAX_ARCHIVE or not 0 <= p["file_bytes"] <= MAX_EXPANDED or
                 not 0 < p["entries"] <= MAX_ENTRIES):
@@ -170,8 +173,8 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
         raise ValueError("host package origin redirected")
 
 
-def download(pin: dict, destination: Path) -> None:
-    if not valid_url(pin) or type(pin["size"]) is not int or not 0 < pin["size"] <= MAX_ARCHIVE:
+def download(pin: dict, destination: Path, suite="noble") -> None:
+    if not valid_url(pin, suite) or type(pin["size"]) is not int or not 0 < pin["size"] <= MAX_ARCHIVE:
         raise ValueError("invalid host package download pin")
     # Fixed public origins; no proxies, credentials, cookies or redirects.
     opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
@@ -246,28 +249,39 @@ def build_assets(*, source: Path, release: str, source_sha: str, repository: str
         with tempfile.TemporaryDirectory(prefix="borealis-release-host-packages-") as temporary:
             snapshot = Path(temporary) / "source"
             bootstrap.source_snapshot(source, snapshot, release, source_sha, repository)
-            plan, digest = parse_plan((snapshot / LOCK).read_bytes())
-            if archives is None or os.environ.get("BOREALIS_BUILD_ARTIFACT_CACHE"):
-                existing = archives
-                archives = Path(temporary) / "cache"
-                archives.mkdir()
-                for pin in plan["packages"]:
-                    def acquire(path, pin=pin):
-                        if existing is None:
-                            download(pin, path)
-                        else:
-                            with regular_reader(existing / pin["file"], pin["size"]) as src, path.open("xb") as dst:
-                                shutil.copyfileobj(src, dst)
-                    pinned_input(pin["sha256"], pin["size"], archives / pin["file"], acquire)
-            destination = output_dir / ARCHIVE
-            assemble_archive(plan, archives, destination)
-            inventory = dict(plan, repository=repository, release=release, source_sha=source_sha, plan_sha256=digest,
-                             archive=dict(name=ARCHIVE, size=destination.stat().st_size, sha256=bootstrap.digest(destination)))
-            (output_dir / INVENTORY).write_text(json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n")
+            inventory = build_suite(snapshot, "noble", release, source_sha, repository, output_dir, archives, temporary)
+            if (snapshot / RESOLUTE_LOCK).is_file():
+                build_suite(snapshot, "resolute", release, source_sha, repository, output_dir, archives, temporary)
             return inventory
     except BaseException:
         shutil.rmtree(output_dir)
         raise
+
+
+def build_suite(snapshot, suite, release, source_sha, repository, output_dir, archives, temporary):
+    plan, digest = parse_plan((snapshot / (LOCK if suite == "noble" else RESOLUTE_LOCK)).read_bytes())
+    if plan["suite"] != suite:
+        raise ValueError("suite lock mismatch")
+    if archives is not None and (archives / suite).is_dir():
+        archives = archives / suite
+    if archives is None or os.environ.get("BOREALIS_BUILD_ARTIFACT_CACHE"):
+        existing = archives
+        archives = Path(temporary) / (suite + "-cache")
+        archives.mkdir()
+        for pin in plan["packages"]:
+            def acquire(path, pin=pin):
+                if existing is None:
+                    download(pin, path, suite)
+                else:
+                    with regular_reader(existing / pin["file"], pin["size"]) as src, path.open("xb") as dst:
+                        shutil.copyfileobj(src, dst)
+            pinned_input(pin["sha256"], pin["size"], archives / pin["file"], acquire)
+    destination = output_dir / (ARCHIVE if suite == "noble" else RESOLUTE_ARCHIVE)
+    assemble_archive(plan, archives, destination)
+    inventory = dict(plan, repository=repository, release=release, source_sha=source_sha, plan_sha256=digest,
+                     archive=dict(name=destination.name, size=destination.stat().st_size, sha256=bootstrap.digest(destination)))
+    (output_dir / (INVENTORY if suite == "noble" else RESOLUTE_INVENTORY)).write_text(json.dumps(inventory, sort_keys=True, separators=(",", ":")) + "\n")
+    return inventory
 
 
 def main() -> int:

@@ -311,7 +311,14 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		defer cleanup("inputs", inputs.Close, clusterbootstrap.ErrPreparationConfig)
 		checks.Storage = newClusterSSHPrejoinWorkerStorageRead(ctx, initial.Storage, checks.Authority)
 		mark("host_package_inventory")
-		packages, err := resolveClusterSSHHostPackageInventory(ctx, expected.Source)
+		if expected.TargetPackages == nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		packagePlan, _, err := expected.TargetPackages.Plan()
+		if err != nil {
+			return err
+		}
+		packages, err := resolveClusterSSHHostPackageInventory(ctx, expected.Source, packagePlan.Suite)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "host package inventory")
 			return err
@@ -442,11 +449,6 @@ func withClusterSSHPreparationSourceFor(parent context.Context, scratchParent st
 		joinDemand, err := clusterSSHK3sConfigurationDemands(expected)
 		if err != nil {
 			reportClusterSSHPrejoinCheck(ctx, "K3s configuration demand")
-			return err
-		}
-		packagePlan, _, err := clusterbootstrap.HostPackagePins()
-		if err != nil {
-			reportClusterSSHPrejoinCheck(ctx, "package pins")
 			return err
 		}
 		hostFiles, err := clusterSSHPreparationHostFileDemands(expected, packagePlan.Suite)

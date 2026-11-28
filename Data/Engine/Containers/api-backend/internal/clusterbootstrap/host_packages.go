@@ -28,6 +28,9 @@ const (
 //go:embed host_packages.lock.json
 var hostPackageLock []byte
 
+//go:embed host_packages.resolute.lock.json
+var resoluteHostPackageLock []byte
+
 type HostPackagePin struct {
 	Name            string                    `json:"name"`
 	Version         string                    `json:"version"`
@@ -63,6 +66,7 @@ type hostPackagePlanAuthority struct {
 // Compile embedded release authority once. Source changes create a new binary
 // and therefore a new compilation; callers receive deep copies only.
 var compiledHostPackagePlan = compileHostPackagePlan(hostPackageLock)
+var resoluteHostPackagePlan = compileHostPackagePlan(resoluteHostPackageLock)
 
 var hostPackageName = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,199}$`)
 var hostPackageVersion = regexp.MustCompile(`^[0-9][A-Za-z0-9.+:~\-]{0,199}$`)
@@ -75,9 +79,50 @@ var hostPackageRoots = map[string]string{
 }
 
 // HostPackagePins returns independent records, never mutable process trust.
-// Only this suite is currently pinned; other platform plans remain unqualified.
+// Historical preparations without a suite-specific selection used Noble.
 func HostPackagePins() (HostPackagePlan, string, error) {
 	return compiledHostPackagePlan.pins()
+}
+
+// HostPackagePlanForSuite selects only release-compiled inventory.
+func HostPackagePlanForSuite(suite string) (HostPackagePlan, string, error) {
+	switch suite {
+	case "noble":
+		return compiledHostPackagePlan.pins()
+	case "resolute":
+		return resoluteHostPackagePlan.pins()
+	default:
+		return HostPackagePlan{}, "", ErrPreparationConfig
+	}
+}
+
+// HostPackageSuiteForVersion maps the observed Ubuntu VERSION_ID to a compiled plan.
+func HostPackageSuiteForVersion(version string) (string, error) {
+	switch version {
+	case "24.04":
+		return "noble", nil
+	case "26.04":
+		return "resolute", nil
+	default:
+		return "", ErrPreparationConfig
+	}
+}
+
+func (s HostPackageSelection) Plan() (HostPackagePlan, string, error) {
+	for _, authority := range []*hostPackagePlanAuthority{&compiledHostPackagePlan, &resoluteHostPackagePlan} {
+		if s.PlanSHA256 != "" && s.PlanSHA256 == authority.digest {
+			return authority.pins()
+		}
+	}
+	return HostPackagePlan{}, "", ErrPreparationConfig
+}
+
+func (plan HostPackagePlan) ArchiveName() string {
+	return "borealis-node-host-packages-ubuntu-" + plan.Suite + "-linux-amd64.tar"
+}
+
+func (plan HostPackagePlan) InventoryName() string {
+	return strings.TrimSuffix(plan.ArchiveName(), ".tar") + ".json"
 }
 
 func compileHostPackagePlan(raw []byte) hostPackagePlanAuthority {
@@ -169,7 +214,7 @@ func parseHostPackagePlan(raw []byte) (HostPackagePlan, string, error) {
 }
 
 func validateHostPackagePlan(plan HostPackagePlan) error {
-	if plan.Version != 1 || plan.OS != "ubuntu" || plan.OSVersion != "24.04" || plan.Suite != "noble" || plan.Platform != "linux-amd64" ||
+	if plan.Version != 1 || plan.OS != "ubuntu" || !(plan.OSVersion == "24.04" && plan.Suite == "noble" || plan.OSVersion == "26.04" && plan.Suite == "resolute") || plan.Platform != "linux-amd64" ||
 		len(plan.Packages) < len(hostPackageRoots) || len(plan.Packages) > 256 || !validHostPackageDirectories(plan.DataDirectories) {
 		return ErrImageArchive
 	}
@@ -179,7 +224,7 @@ func validateHostPackagePlan(plan HostPackagePlan) error {
 		if !hostPackageName.MatchString(p.Name) || !hostPackageVersion.MatchString(p.Version) ||
 			(p.Architecture != "amd64" && p.Architecture != "all") || !hostPackageFile.MatchString(p.File) ||
 			(p.Phase != "base" && p.Phase != "docker") || (i > 0 && plan.Packages[i-1].Name >= p.Name) || files[p.File] ||
-			p.Size < 1 || p.Size > MaxImageArchiveBytes || !digestPattern.MatchString(p.SHA256) || p.SHA256 == strings.Repeat("0", 64) || !validHostPackageURL(p) ||
+			p.Size < 1 || p.Size > MaxImageArchiveBytes || !digestPattern.MatchString(p.SHA256) || p.SHA256 == strings.Repeat("0", 64) || !validHostPackageURL(p, plan.Suite) ||
 			p.FileBytes < 0 || p.FileBytes > MaxImageExpandedBytes || p.Entries < 1 || p.Entries > MaxImageEntries || validateHostPackageContent(p) != nil {
 			return ErrImageArchive
 		}
@@ -203,7 +248,7 @@ func validateHostPackagePlan(plan HostPackagePlan) error {
 
 var hostPackageURLSegment = regexp.MustCompile(`^[A-Za-z0-9+._~\-]+$`)
 
-func validHostPackageURL(p HostPackagePin) bool {
+func validHostPackageURL(p HostPackagePin, suite string) bool {
 	u, err := url.Parse(p.URL)
 	if err != nil || len(p.URL) > 2048 || u.Scheme != "https" || u.User != nil || u.RawQuery != "" || u.ForceQuery ||
 		u.Fragment != "" || u.RawFragment != "" || u.Opaque != "" || u.RawPath != "" || strings.ContainsAny(p.URL, "%?#") || u.String() != p.URL {
@@ -226,7 +271,7 @@ func validHostPackageURL(p HostPackagePin) bool {
 	case "archive.ubuntu.com":
 		return len(parts) == 6 && parts[0] == "ubuntu" && parts[1] == "pool" && slices.Contains([]string{"main", "universe", "restricted", "multiverse"}, parts[2])
 	case "download.docker.com":
-		return len(parts) == 8 && strings.Join(parts[:7], "/") == "linux/ubuntu/dists/noble/pool/stable/amd64"
+		return len(parts) == 8 && strings.Join(parts[:7], "/") == "linux/ubuntu/dists/"+suite+"/pool/stable/amd64"
 	}
 	return false
 }
@@ -272,7 +317,13 @@ type HostPackageInventory struct {
 }
 
 func ParseHostPackageInventory(raw []byte, expected Expected) (*HostPackageInventory, error) {
-	plan, digest, err := HostPackagePins()
+	var selector struct {
+		Suite string `json:"suite"`
+	}
+	if len(raw) > MaxImageInventoryBytes || json.Unmarshal(raw, &selector) != nil {
+		return nil, ErrImageArchive
+	}
+	plan, digest, err := HostPackagePlanForSuite(selector.Suite)
 	if err != nil {
 		return nil, err
 	}
@@ -281,11 +332,11 @@ func ParseHostPackageInventory(raw []byte, expected Expected) (*HostPackageInven
 
 func parseHostPackageInventory(raw []byte, expected Expected, plan HostPackagePlan, digest string) (*HostPackageInventory, error) {
 	var wire hostPackageInventoryWire
-	if !expected.acceptsInventory("host_package", raw) || validateHostPackagePlan(plan) != nil || !digestPattern.MatchString(digest) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes ||
+	if !expected.acceptsInventory(hostPackageInventoryFamily(plan.Suite), raw) || validateHostPackagePlan(plan) != nil || !digestPattern.MatchString(digest) || len(raw) == 0 || len(raw) > MaxImageInventoryBytes ||
 		imageFields(raw, []string{"version", "repository", "release", "source_sha", "os", "os_version", "suite", "platform", "plan_sha256", "archive", "packages", "data_directories"}, nil) != nil ||
 		imageJSON(raw, &wire) != nil || wire.Version != 1 || wire.Repository != expected.Repository || wire.Release != expected.packagingRelease() || wire.SourceSHA != expected.SourceSHA ||
 		wire.OS != plan.OS || wire.OSVersion != plan.OSVersion || wire.Suite != plan.Suite || wire.Platform != plan.Platform || wire.PlanSHA256 != digest ||
-		!reflect.DeepEqual(wire.Packages, plan.Packages) || !slices.Equal(wire.DataDirectories, plan.DataDirectories) || wire.Archive.Name != HostPackageArchiveName || wire.Archive.Size != hostPackageArchiveSize(plan.Packages) ||
+		!reflect.DeepEqual(wire.Packages, plan.Packages) || !slices.Equal(wire.DataDirectories, plan.DataDirectories) || wire.Archive.Name != plan.ArchiveName() || wire.Archive.Size != hostPackageArchiveSize(plan.Packages) ||
 		!digestPattern.MatchString(wire.Archive.SHA256) || wire.Archive.SHA256 == strings.Repeat("0", 64) {
 		return nil, ErrImageArchive
 	}
@@ -304,6 +355,8 @@ func parseHostPackageInventory(raw []byte, expected Expected, plan HostPackagePl
 	}
 	return &HostPackageInventory{development: expected.Development, wire: wire, raw: bytes.Clone(raw)}, nil
 }
+
+func (v *HostPackageInventory) Suite() string { return v.wire.Suite }
 
 func (v *HostPackageInventory) Packages() []HostPackagePin {
 	if v == nil {
@@ -375,4 +428,11 @@ func (v *HostPackageInventory) VerifyArchive(ctx context.Context, source io.Read
 		return ErrImageArchive
 	}
 	return nil
+}
+
+func hostPackageInventoryFamily(suite string) string {
+	if suite == "resolute" {
+		return "host_package_resolute"
+	}
+	return "host_package"
 }

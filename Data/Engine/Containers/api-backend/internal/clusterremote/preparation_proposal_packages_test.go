@@ -63,6 +63,34 @@ func TestPreparationProposalPackageSelectionParity(t *testing.T) {
 	}
 }
 
+func TestPreparationProposalObservedUbuntuSuite(t *testing.T) {
+	for _, version := range []string{"26.04", "24.04"} {
+		t.Run(version, func(t *testing.T) {
+			root, write, prelude := preparationNativeFixture(t)
+			write("etc/os-release", "ID=ubuntu\nVERSION_ID="+version+"\nVERSION_CODENAME=resolute\n")
+			q := preparationProposalFixture()
+			raw, err := runPreparationNativeFixture(t, root, prelude, q)
+			if version != "26.04" {
+				if err == nil {
+					t.Fatal("mismatched version and suite accepted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			proof, err := parsePreparationProposalProof(raw, q)
+			if err != nil || proof.Packages == nil {
+				t.Fatal("missing observed package selection", err)
+			}
+			plan, _, err := proof.Packages.Plan()
+			if err != nil || plan.OSVersion != version || plan.Suite != "resolute" {
+				t.Fatal("unexpected selected package plan", err)
+			}
+		})
+	}
+}
+
 func TestPreparationProposalRejectsAbsentOrMalformedPackageSelection(t *testing.T) {
 	p := preparationProposalFixture()
 	proof := preparationProofFixture(p)
@@ -94,7 +122,7 @@ func TestPreparationPackageProfileMatchesFilesystem(t *testing.T) {
 	if err != nil || proof.Packages == nil || !proposalDigest(proof.Packages.ProfileSHA256) {
 		t.Fatal("missing approved package profile", err)
 	}
-	library, err := persistentFilesystemLibraries()
+	library, err := persistentFilesystemLibraries("24.04")
 	if err != nil {
 		t.Fatal(err)
 	}

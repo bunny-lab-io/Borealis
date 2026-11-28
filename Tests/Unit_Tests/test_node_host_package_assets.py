@@ -94,6 +94,17 @@ class NodeHostPackageAssetsTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             packages.NoRedirect().redirect_request(urllib.request.Request(pin["url"]), None, 302, "", {}, pin["url"])
 
+    def test_resolute_inventory_rejects_mixed_release_or_docker_origin(self):
+        raw = (ROOT / packages.RESOLUTE_LOCK).read_bytes()
+        plan, digest = packages.parse_plan(raw)
+        self.assertEqual((plan["suite"], plan["os_version"], len(plan["packages"])), ("resolute", "26.04", 86))
+        self.assertEqual(digest, hashlib.sha256(raw).hexdigest())
+        docker = next(p for p in plan["packages"] if p["name"] == "docker-ce")
+        self.assertTrue(packages.valid_url(docker, "resolute"))
+        self.assertFalse(packages.valid_url(docker, "noble"))
+        with self.assertRaises(ValueError):
+            packages.parse_plan(wire(dict(plan, os_version="24.04")))
+
     def test_reviewed_lock_and_strict_boundaries(self):
         original = (ROOT / packages.LOCK).read_bytes()
         plan, digest = packages.parse_plan(original)
@@ -160,7 +171,8 @@ class NodeHostPackageAssetsTests(unittest.TestCase):
             self.assertEqual((root / "second" / packages.ARCHIVE).read_bytes(), first)
             args["output_dir"] = root / "downloaded"
             args["archives"] = None
-            def download(pin, destination):
+            def download(pin, destination, suite):
+                self.assertEqual(suite, "noble")
                 destination.write_bytes((cache / pin["file"]).read_bytes())
             with mock.patch.object(packages, "download", side_effect=download) as fetch:
                 self.assertEqual(packages.build_assets(**args), result)

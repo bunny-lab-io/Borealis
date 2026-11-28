@@ -32,13 +32,16 @@ func (e Expected) developmentBinding() (developmentBinding, error) {
 		imageFields(raw, []string{"schema", "channel", "platform", "repository", "source_sha", "source_tree", "manifest_sha256", "inventories"}, nil) != nil ||
 		json.Unmarshal(raw, &b) != nil || b.Schema != 2 || b.Channel != "development" || b.Platform != "linux-amd64" ||
 		b.Repository != e.Repository || b.Source != e.SourceSHA || !shaPattern.MatchString(b.Tree) || b.Tree == strings.Repeat("0", 40) ||
-		!digestPattern.MatchString(b.Manifest) || len(b.Inventories) != 5 {
+		!digestPattern.MatchString(b.Manifest) || (len(b.Inventories) != 5 && len(b.Inventories) != 6) {
 		return developmentBinding{}, ErrPreparationConfig
 	}
 	for _, name := range []string{"bootstrap", "image", "external", "k3s", "host_package"} {
 		if !digestPattern.MatchString(b.Inventories[name]) {
 			return developmentBinding{}, ErrPreparationConfig
 		}
+	}
+	if len(b.Inventories) == 6 && !digestPattern.MatchString(b.Inventories["host_package_resolute"]) {
+		return developmentBinding{}, ErrPreparationConfig
 	}
 	return b, nil
 }

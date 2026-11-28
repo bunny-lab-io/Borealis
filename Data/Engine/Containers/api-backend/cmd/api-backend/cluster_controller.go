@@ -1677,6 +1677,11 @@ func (c *clusterController) completeOperation(ctx context.Context, operation clu
 			nextConfig := parseClusterJSON(configJSON)
 			nextConfig["k3s_version"] = cleanText(operation.Payload["k3s_version"])
 			nextConfig["release_channel"] = clusterReleaseChannel(baselineRelease)
+			if tag := cleanText(operation.Payload["development_ancestor_release"]); clusterDevelopmentReleaseRE.MatchString(baselineRelease) && clusterReleaseBase(tag) != "" {
+				nextConfig["development_ancestor_release"] = tag
+				nextConfig["development_ancestor_sha"] = cleanText(operation.Payload["development_ancestor_sha"])
+				nextConfig["development_version_floor"] = clusterReleaseBase(tag)
+			}
 			if clusterReleaseChannel(baselineRelease) == "stable" {
 				nextConfig["last_stable_release"] = baselineRelease
 				nextConfig["last_stable_sha"] = baselineSHA

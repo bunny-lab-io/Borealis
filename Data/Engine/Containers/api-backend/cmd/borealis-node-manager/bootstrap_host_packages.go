@@ -20,6 +20,7 @@ type bootstrapHostPackagePlan struct {
 	before    map[string]bootstrapHostPackageState
 	selected  []clusterbootstrap.HostPackagePin
 	preflight bool
+	suite     string
 }
 
 func parseBootstrapHostPackageState(raw []byte) (map[string]bootstrapHostPackageState, error) {
@@ -30,7 +31,7 @@ func parseBootstrapHostPackageState(raw []byte) (map[string]bootstrapHostPackage
 	return states, nil
 }
 
-func newBootstrapHostPackagePlan(directory string, phase bootstrapHostCommand, installed []byte) (*bootstrapHostPackagePlan, error) {
+func newBootstrapHostPackagePlan(suite, directory string, phase bootstrapHostCommand, installed []byte) (*bootstrapHostPackagePlan, error) {
 	want := ""
 	switch phase {
 	case bootstrapHostInstallBase:
@@ -40,17 +41,17 @@ func newBootstrapHostPackagePlan(directory string, phase bootstrapHostCommand, i
 	default:
 		return nil, errBootstrapSource
 	}
-	return newBootstrapHostPackagePlanFor(directory, want, installed, false)
+	return newBootstrapHostPackagePlanFor(suite, directory, want, installed, false)
 }
 
 // Both fixed phases must resolve together before the first package effect. Docker
 // cannot be simulated alone on a fresh host whose base dependencies are absent.
 // This union is observation-only; it can never produce an install command.
-func newBootstrapHostPackagePreflightPlan(directory string, installed []byte) (*bootstrapHostPackagePlan, error) {
-	return newBootstrapHostPackagePlanFor(directory, "", installed, true)
+func newBootstrapHostPackagePreflightPlan(suite, directory string, installed []byte) (*bootstrapHostPackagePlan, error) {
+	return newBootstrapHostPackagePlanFor(suite, directory, "", installed, true)
 }
 
-func newBootstrapHostPackagePlanFor(directory, phase string, installed []byte, preflight bool) (*bootstrapHostPackagePlan, error) {
+func newBootstrapHostPackagePlanFor(suite, directory, phase string, installed []byte, preflight bool) (*bootstrapHostPackagePlan, error) {
 	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || directory == "/" || len(directory) > 1024 ||
 		(preflight && phase != "") || (!preflight && phase != "base" && phase != "docker") {
 		return nil, errBootstrapSource
@@ -64,7 +65,7 @@ func newBootstrapHostPackagePlanFor(directory, phase string, installed []byte, p
 	if err != nil {
 		return nil, err
 	}
-	selection, err := clusterbootstrap.SelectHostPackages(installed)
+	selection, err := clusterbootstrap.SelectHostPackagesForSuite(installed, suite)
 	if err != nil {
 		return nil, errBootstrapSource
 	}
@@ -72,7 +73,7 @@ func newBootstrapHostPackagePlanFor(directory, phase string, installed []byte, p
 	if err != nil {
 		return nil, errBootstrapSource
 	}
-	p := &bootstrapHostPackagePlan{directory: directory, before: before, preflight: preflight}
+	p := &bootstrapHostPackagePlan{directory: directory, before: before, preflight: preflight, suite: suite}
 	for _, pin := range pins {
 		if preflight || pin.Phase == phase {
 			p.selected = append(p.selected, pin)
@@ -163,6 +164,9 @@ func (p *bootstrapHostPackagePlan) validateSimulation(raw []byte) error {
 	}
 	lines := strings.Split(string(raw[:len(raw)-1]), "\n")
 	prefix := []string{"Reading package lists...", "Building dependency tree...", "Reading state information..."}
+	if p.suite == "resolute" && len(lines) > len(prefix) && lines[len(prefix)] == "Solving dependencies..." {
+		prefix = append(prefix, "Solving dependencies...")
+	}
 	if len(lines) < len(prefix)+1 {
 		return errBootstrapSource
 	}

@@ -36,7 +36,7 @@ func StageHostPackages(ctx context.Context, parent string, expected Expected, in
 		return nil, ErrImageArchive
 	}
 	asset := inventory.Archive()
-	if asset.Name != HostPackageArchiveName || asset.Size <= 0 || asset.Size > MaxImageArchiveBytes {
+	if asset.Name != (HostPackagePlan{Suite: inventory.wire.Suite}).ArchiveName() || asset.Size <= 0 || asset.Size > MaxImageArchiveBytes {
 		return nil, ErrImageArchive
 	}
 	directory, err := os.MkdirTemp(parent, "borealis-node-host-packages-")
@@ -126,7 +126,7 @@ func (s *HostPackageSet) Close() error {
 	}
 	// Remove only the fixed archive through the retained directory descriptor.
 	// A renamed scratch directory cannot redirect this removal into a new one.
-	removeErr := s.root.Remove(HostPackageArchiveName)
+	removeErr := s.root.Remove(s.inventory.Archive().Name)
 	if errors.Is(removeErr, os.ErrNotExist) {
 		removeErr = nil
 	}

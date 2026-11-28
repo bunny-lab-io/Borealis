@@ -14,7 +14,7 @@ func TestFilesystemPersistentNative(t *testing.T) {
 		t.Run(mode, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
-			library, buildErr := persistentFilesystemLibraries()
+			library, buildErr := persistentFilesystemLibraries("24.04")
 			if buildErr != nil {
 				t.Fatal(buildErr)
 			}

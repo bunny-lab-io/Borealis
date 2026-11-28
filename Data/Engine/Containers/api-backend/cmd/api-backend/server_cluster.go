@@ -657,6 +657,15 @@ func clusterMutationHandler(auth *authService, kind string, parse func(map[strin
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
+		if kind == "cluster_enable" && os.Getenv("BOREALIS_DEVELOPMENT_CATALOG_ENABLED") == "true" && clusterDevelopmentReleaseRE.MatchString(cleanText(mutation.Payload["baseline_release"])) {
+			tag, sha, err := initialDevelopmentAncestor(clusterContextWithGitHubToken(ctx, auth.store, auth.aegis), cleanText(mutation.Payload["baseline_sha"]), cleanText(mutation.Payload["k3s_version"]))
+			if err != nil {
+				writeClusterError(w, fmt.Errorf("%w: could not verify the installed development source's release ancestry: %v", errClusterConflict, err))
+				return
+			}
+			mutation.Payload["development_ancestor_release"] = tag
+			mutation.Payload["development_ancestor_sha"] = sha
+		}
 		result, err := store.createClusterOperation(ctx, identity.Username, mutation)
 		if err != nil {
 			writeClusterError(w, err)

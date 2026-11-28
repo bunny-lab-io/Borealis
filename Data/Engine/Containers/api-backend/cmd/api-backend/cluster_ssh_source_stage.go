@@ -239,8 +239,12 @@ func (c *clusterController) stageInspectionRelease(ctx context.Context, op clust
 			return err
 		}
 		phase = "release acquisition"
+		suite, err := preparationCohortPackageSuite(proof.Cohort)
+		if err != nil {
+			return err
+		}
 		stage.postgres = source.Postgres
-		stage.clusterSSHPreparationArtifactBytes, err = acquireClusterSSHPreparationArtifacts(ctx, dir, expected, version, source.Postgres, check)
+		stage.clusterSSHPreparationArtifactBytes, err = acquireClusterSSHPreparationArtifacts(ctx, dir, expected, version, source.Postgres, suite, check)
 		var failure clusterSSHReleaseStageFailure
 		if errors.As(err, &failure) {
 			phase = failure.phase

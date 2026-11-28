@@ -117,7 +117,7 @@ func TestClusterSSHPreparationCapacityComposition(t *testing.T) {
 					return observation, nil
 				}
 			}
-			storage := newClusterSSHPreparationStorageRead(f.snapshot, f.check, storageSource, preparationWaitingStorageDemand(ownedDemand), filesystems)
+			storage := newClusterSSHPreparationStorageRead(f.snapshot, f.check, storageSource, preparationWaitingStorageDemand(ownedDemand, "noble"), filesystems)
 			if mode == "missing filesystem reader" {
 				storage = nil
 			}

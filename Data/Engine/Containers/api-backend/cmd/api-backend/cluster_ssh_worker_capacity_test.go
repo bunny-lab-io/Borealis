@@ -24,7 +24,7 @@ func TestClusterSSHPreparationWorkerScratchBudget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	packages, err := resolveClusterSSHHostPackageInventory(bootstrapContext(), f.expected)
+	packages, err := resolveClusterSSHHostPackageInventory(bootstrapContext(), f.expected, "noble")
 	if err != nil {
 		t.Fatal(err)
 	}

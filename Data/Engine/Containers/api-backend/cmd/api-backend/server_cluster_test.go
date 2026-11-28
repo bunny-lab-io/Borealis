@@ -46,6 +46,52 @@ func TestClusterReleaseCatalogWithAssetHeavyPages(t *testing.T) {
 	}
 }
 
+func TestInitialDevelopmentAncestor(t *testing.T) {
+	installed, ancestor := strings.Repeat("a", 40), strings.Repeat("b", 40)
+	tag, k3s := "2026.11.1-rc.30", "v1.36.3+k3s1"
+	for _, mode := range []string{"ancestor", "diverged", "mutable", "wrong K3s"} {
+		t.Run(mode, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var result any
+				switch {
+				case strings.HasSuffix(r.URL.Path, "/releases"):
+					result = []clusterGitHubRelease{{TagName: tag, Immutable: mode != "mutable", Prerelease: true, PublishedAt: "2026-11-24T00:00:00Z"}}
+				case strings.HasSuffix(r.URL.Path, "/git/ref/tags/"+tag):
+					result = map[string]any{"object": map[string]string{"type": "commit", "sha": ancestor}}
+				case strings.HasSuffix(r.URL.Path, ancestor+"/Data/Engine/release-manifest.json"):
+					version := k3s
+					if mode == "wrong K3s" {
+						version = "v1.35.1+k3s1"
+					}
+					result = clusterReleaseManifest{SchemaVersion: 1, ClusterCompatible: true, AllowedReleaseChannels: []string{"qualification"}, MinimumRollingVersion: "2026.08.0", DatabaseMigration: "expand-contract", RequiredK3sBaseline: version, RequiredK3sConformance: "pod-restart-policy-liveness-delay-guard-v1"}
+				case strings.HasSuffix(r.URL.Path, "/compare/"+ancestor+"..."+installed):
+					status := "ahead"
+					if mode == "diverged" {
+						status = "diverged"
+					}
+					result = map[string]string{"status": status}
+				default:
+					t.Errorf("unexpected path %s", r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(result)
+			}))
+			defer server.Close()
+			t.Setenv("BOREALIS_GITHUB_API_BASE_URL", server.URL)
+			t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", server.URL)
+			release, sha, err := initialDevelopmentAncestor(context.Background(), installed, k3s)
+			if mode == "ancestor" {
+				if err != nil || release != tag || sha != ancestor {
+					t.Fatalf("floor provenance: %s %s %v", release, sha, err)
+				}
+			} else if err == nil || release != "" || sha != "" {
+				t.Fatal("incompatible release established a floor")
+			}
+		})
+	}
+}
+
 type clusterTestStore struct {
 	profile       operatorProfile
 	snapshot      map[string]any

@@ -31,14 +31,30 @@ type clusterSSHPairInstallation struct {
 	Demand          []clusterSSHPreparationCapacityTarget `json:"demand"`
 }
 
-func pairManifestLimits() map[string]int64 {
-	return map[string]int64{clusterbootstrap.ManifestName: clusterbootstrap.MaxManifestBytes, clusterbootstrap.ImageInventoryName: clusterbootstrap.MaxImageInventoryBytes, clusterbootstrap.ExternalInventoryName: clusterbootstrap.MaxImageInventoryBytes, clusterbootstrap.K3sInventoryName: clusterbootstrap.MaxK3sInventoryBytes, clusterbootstrap.HostPackageInventoryName: clusterbootstrap.MaxImageInventoryBytes}
+func pairManifestLimits(suites ...string) map[string]int64 {
+	limits := map[string]int64{clusterbootstrap.ManifestName: clusterbootstrap.MaxManifestBytes, clusterbootstrap.ImageInventoryName: clusterbootstrap.MaxImageInventoryBytes, clusterbootstrap.ExternalInventoryName: clusterbootstrap.MaxImageInventoryBytes, clusterbootstrap.K3sInventoryName: clusterbootstrap.MaxK3sInventoryBytes}
+	for _, suite := range suites {
+		limits[(clusterbootstrap.HostPackagePlan{Suite: suite}).InventoryName()] = clusterbootstrap.MaxImageInventoryBytes
+	}
+	return limits
 }
 func (p *clusterSSHPairInstallation) valid() bool {
-	if p == nil || !validClusterSSHPreparationDigest(p.Inspection) || !validClusterSSHPreparationDigest(p.Configuration) || !clusterbootstrap.ValidPostgresImageReference(p.PostgresImage) || len(p.Targets) != 2 || len(p.Demand) != 2 || len(p.SystemDiskBytes) != 2 || !validClusterSSHPreparationPackages(p.Targets, p.Packages) || len(p.Manifests) != len(pairManifestLimits()) {
+	if p == nil || !validClusterSSHPreparationDigest(p.Inspection) || !validClusterSSHPreparationDigest(p.Configuration) || !clusterbootstrap.ValidPostgresImageReference(p.PostgresImage) || len(p.Targets) != 2 || len(p.Demand) != 2 || len(p.SystemDiskBytes) != 2 || !validClusterSSHPreparationPackages(p.Targets, p.Packages) {
 		return false
 	}
-	for name := range pairManifestLimits() {
+	var suites []string
+	for _, pkg := range p.Packages {
+		plan, _, err := pkg.Selection.Plan()
+		if err != nil {
+			return false
+		}
+		suites = append(suites, plan.Suite)
+	}
+	limits := pairManifestLimits(suites...)
+	if len(limits) != len(p.Manifests) {
+		return false
+	}
+	for name := range limits {
 		if !clusterBootstrapDigestPattern.MatchString(p.Manifests[name]) {
 			return false
 		}
@@ -76,7 +92,15 @@ func inspectClusterSSHPair(ctx context.Context, work clusterSSHQualificationWork
 	if err != nil {
 		return err
 	}
-	manifests, err := resolveClusterPackagedAssets(ctx, work.Baseline, pairManifestLimits())
+	var suites []string
+	for _, host := range work.Proof.Cohort.Targets {
+		suite, err := clusterbootstrap.HostPackageSuiteForVersion(host.Report.OSVersion)
+		if err != nil || host.Report.OSID != "ubuntu" {
+			return fail
+		}
+		suites = append(suites, suite)
+	}
+	manifests, err := resolveClusterPackagedAssets(ctx, work.Baseline, pairManifestLimits(suites...))
 	if err != nil {
 		return err
 	}
@@ -111,6 +135,10 @@ func inspectClusterSSHPair(ctx context.Context, work clusterSSHQualificationWork
 			return fail
 		}
 		packages := pr.Packages.Clone()
+		plan, _, err := packages.Plan()
+		if err != nil || plan.Suite != suites[i] {
+			return fail
+		}
 		digest, err := clusterSSHPreparationPackageDigest(packages)
 		if err != nil {
 			return err
@@ -183,15 +211,7 @@ func qualifyPairStorage(ctx context.Context, work clusterSSHQualificationWork, r
 	if err != nil {
 		return nil, err
 	}
-	packages, err := resolveClusterSSHHostPackageInventory(ctx, work.Baseline)
-	if err != nil {
-		return nil, err
-	}
 	assets, err := resolveClusterPackagedAssets(ctx, work.Baseline, map[string]int64{clusterbootstrap.BundleName: clusterbootstrap.MaxBundleBytes})
-	if err != nil {
-		return nil, err
-	}
-	suite, _, err := clusterbootstrap.HostPackagePins()
 	if err != nil {
 		return nil, err
 	}
@@ -199,40 +219,48 @@ func qualifyPairStorage(ctx context.Context, work clusterSSHQualificationWork, r
 	if err != nil {
 		return nil, err
 	}
-	hostFiles, err := clusterSSHPreparationPlanHostFileDemands(source, suite.Suite)
-	if err != nil {
-		return nil, err
-	}
-	pins := packages.inventory.Packages()
-	scratch := clusterSSHFilesystemDemand{Path: "/opt/Borealis", Bytes: uint64(assets[clusterbootstrap.BundleName].Size + 2*clusterbootstrap.MaxExpandedBytes + packages.inventory.Archive().Size), Entries: uint64(2*clusterbootstrap.MaxEntries + len(pins) + 8)}
-	var installed []clusterSSHFilesystemDemand
-	for _, pkg := range pins {
-		scratch.Bytes += uint64(pkg.Size)
-		for _, dst := range pkg.DataPaths {
-			path := dst.Path
-			if path == "/lib" || path == "/sbin" {
-				path = "/usr"
-			}
-			installed = append(installed, clusterSSHFilesystemDemand{Path: path, Bytes: uint64(dst.FileBytes + dst.LinkBytes), Entries: uint64(dst.Entries)})
+	perSuite := map[string][]clusterSSHFilesystemDemand{}
+	targetPackages := make([][]clusterSSHFilesystemDemand, len(p.Packages))
+	for i, selected := range p.Packages {
+		plan, _, err := selected.Selection.Plan()
+		if err != nil {
+			return nil, err
 		}
+		if _, present := perSuite[plan.Suite]; !present {
+			packages, err := resolveClusterSSHHostPackageInventory(ctx, work.Baseline, plan.Suite)
+			if err != nil {
+				return nil, err
+			}
+			perSuite[plan.Suite], err = pairPackageDemands(source, plan.Suite, packages, assets[clusterbootstrap.BundleName].Size)
+			if err != nil {
+				return nil, err
+			}
+		}
+		targetPackages[i] = perSuite[plan.Suite]
 	}
-	demands, err := mergeClusterSSHFilesystemDemands(appBytes, externalBytes, k3sBytes, hostFiles, clusterSSHK3sConfigurationBudget(), installed, []clusterSSHFilesystemDemand{scratch})
+	demands, err := mergeClusterSSHFilesystemDemands(appBytes, externalBytes, k3sBytes, clusterSSHK3sConfigurationBudget())
 	if err != nil {
 		return nil, err
 	}
 	var result []clusterSSHTargetStorageCapacity
 	err = withClusterSSHQualificationPostgresCapacity(ctx, v.Storage.Requirements.PostgresImage, demands, readers.Refresh, acquireClusterSSHQualificationPostgres, func(ctx context.Context, capacity clusterSSHPreparedImageCapacity) error {
-		paths, ok := clusterSSHStorageDemandPaths(v.Storage.Requirements.Policy, capacity.Target)
-		if !ok {
-			return fail
-		}
+		targetDemands := make([][]clusterSSHFilesystemDemand, len(p.Packages))
 		selections := make([]clusterSSHTargetFilesystemSelection, len(p.Packages))
 		for i, pkg := range p.Packages {
+			demand, err := mergeClusterSSHFilesystemDemands(capacity.Target, targetPackages[i])
+			if err != nil {
+				return err
+			}
+			paths, ok := clusterSSHStorageDemandPaths(v.Storage.Requirements.Policy, demand)
+			if !ok {
+				return fail
+			}
+			targetDemands[i] = demand
 			selections[i] = clusterSSHTargetFilesystemSelection{TargetID: pkg.TargetID, Paths: paths, RequirePersistent: true, RequirePackageCopies: len(pkg.Selection.Missing) > 0}
 		}
 		return readClusterSSHTargetFilesystemEvidence(ctx, readers, selections, false, func(ctx context.Context, evidence []clusterSSHTargetFilesystemEvidence) error {
 			for i, t := range evidence {
-				budgets, err := calculateClusterSSHPreparationStorageCapacity(v.Storage.Requirements, t.Storage, capacity.Target, &p.Packages[i].Selection)
+				budgets, err := calculateClusterSSHPreparationStorageCapacity(v.Storage.Requirements, t.Storage, targetDemands[i], &p.Packages[i].Selection)
 				if err != nil {
 					return err
 				}
@@ -246,6 +274,27 @@ func qualifyPairStorage(ctx context.Context, work clusterSSHQualificationWork, r
 		})
 	})
 	return result, err
+}
+
+func pairPackageDemands(source clusterbootstrap.PreparationPlan, suite string, packages clusterSSHHostPackageInventory, bundleSize int64) ([]clusterSSHFilesystemDemand, error) {
+	hostFiles, err := clusterSSHPreparationPlanHostFileDemands(source, suite)
+	if err != nil {
+		return nil, err
+	}
+	pins := packages.inventory.Packages()
+	scratch := clusterSSHFilesystemDemand{Path: "/opt/Borealis", Bytes: uint64(bundleSize + 2*clusterbootstrap.MaxExpandedBytes + packages.inventory.Archive().Size), Entries: uint64(2*clusterbootstrap.MaxEntries + len(pins) + 8)}
+	var installed []clusterSSHFilesystemDemand
+	for _, pkg := range pins {
+		scratch.Bytes += uint64(pkg.Size)
+		for _, dst := range pkg.DataPaths {
+			path := dst.Path
+			if path == "/lib" || path == "/sbin" {
+				path = "/usr"
+			}
+			installed = append(installed, clusterSSHFilesystemDemand{Path: path, Bytes: uint64(dst.FileBytes + dst.LinkBytes), Entries: uint64(dst.Entries)})
+		}
+	}
+	return mergeClusterSSHFilesystemDemands(hostFiles, installed, []clusterSSHFilesystemDemand{scratch})
 }
 
 type clusterSSHPairManifestKey struct{}

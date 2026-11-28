@@ -9,7 +9,7 @@ import (
 )
 
 func TestFilesystemHostPackageDirectories(t *testing.T) {
-	library, err := persistentFilesystemLibraries()
+	library, err := persistentFilesystemLibraries("24.04")
 	if err != nil {
 		t.Fatal(err)
 	}

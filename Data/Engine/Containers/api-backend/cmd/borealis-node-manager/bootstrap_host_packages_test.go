@@ -33,7 +33,7 @@ func bootstrapHostPackagePlanFixture(t *testing.T, phase bootstrapHostCommand, e
 			}
 		}
 	}
-	p, err := newBootstrapHostPackagePlan("/opt/borealis-bootstrap-root.aB12345678/packages", phase, raw)
+	p, err := newBootstrapHostPackagePlan("noble", "/opt/borealis-bootstrap-root.aB12345678/packages", phase, raw)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +62,24 @@ func bootstrapHostPackageResultFixture(p *bootstrapHostPackagePlan, before []byt
 		out = append(out, []byte(pin.Name+"\t"+pin.Architecture+"\tinstall ok installed\t"+pin.Version+"\n")...)
 	}
 	return out
+}
+
+func TestResoluteHostPackageSolver(t *testing.T) {
+	plan, err := newBootstrapHostPackagePreflightPlan("resolute", "/archives", []byte(bootstrapHostPackageBefore))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile("testdata/host-packages-resolute-simulation.txt")
+	if err != nil || plan.validateSimulation(raw) != nil {
+		t.Fatalf("pinned Ubuntu 26.04 offline solver output rejected: %v", err)
+	}
+	noble, err := newBootstrapHostPackagePreflightPlan("noble", "/archives", []byte(bootstrapHostPackageBefore))
+	if err != nil || noble.validateSimulation(raw) == nil {
+		t.Fatal("cross-suite solver output accepted")
+	}
+	if plan.validateSimulation([]byte(strings.Replace(string(raw), "0 upgraded,", "1 upgraded,", 1))) == nil {
+		t.Fatal("solver upgrade accepted")
+	}
 }
 
 func TestBootstrapHostPackageCommandsAreFixedAndOffline(t *testing.T) {
@@ -112,12 +130,12 @@ func TestBootstrapHostPackageCommandsAreFixedAndOffline(t *testing.T) {
 		}
 	}
 	for _, path := range []string{"", "/", "relative", "/opt/../tmp", "/opt//packages", "/opt/packages/", "/opt/a\npackages", "/opt/é", "/" + strings.Repeat("x", 1024)} {
-		if p, err := newBootstrapHostPackagePlan(path, bootstrapHostInstallBase, []byte(bootstrapHostPackageBefore)); err == nil || p != nil {
+		if p, err := newBootstrapHostPackagePlan("noble", path, bootstrapHostInstallBase, []byte(bootstrapHostPackageBefore)); err == nil || p != nil {
 			t.Fatal("invalid extraction directory accepted", path)
 		}
 	}
 	for _, phase := range []bootstrapHostCommand{0, bootstrapHostAPTUpdate, bootstrapHostEnableDocker} {
-		if p, err := newBootstrapHostPackagePlan("/opt/packages", phase, []byte(bootstrapHostPackageBefore)); err == nil || p != nil {
+		if p, err := newBootstrapHostPackagePlan("noble", "/opt/packages", phase, []byte(bootstrapHostPackageBefore)); err == nil || p != nil {
 			t.Fatal("unknown package phase accepted")
 		}
 	}
@@ -128,7 +146,7 @@ func TestBootstrapHostPackageCommandsAreFixedAndOffline(t *testing.T) {
 }
 
 func TestBootstrapHostPackagePreflightCannotInstall(t *testing.T) {
-	p, err := newBootstrapHostPackagePreflightPlan("/opt/packages", []byte(bootstrapHostPackageBefore))
+	p, err := newBootstrapHostPackagePreflightPlan("noble", "/opt/packages", []byte(bootstrapHostPackageBefore))
 	if err != nil || p.needsInstall() {
 		t.Fatal("preflight became a mutation plan", err)
 	}
@@ -197,11 +215,11 @@ func TestBootstrapHostPackageSnapshotsPreserveUnchangedPackages(t *testing.T) {
 	for _, state := range []string{"deinstall ok config-files", "install ok unpacked", "hold ok installed"} {
 		pin := p.selected[0]
 		initial := append(slices.Clone(before), []byte(pin.Name+"\t"+pin.Architecture+"\t"+state+"\t"+pin.Version+"\n")...)
-		if _, err := newBootstrapHostPackagePlan(p.directory, bootstrapHostInstallBase, initial); err == nil {
+		if _, err := newBootstrapHostPackagePlan("noble", p.directory, bootstrapHostInstallBase, initial); err == nil {
 			t.Fatal("retained/unfinished selected package treated as fresh", state)
 		}
 	}
-	allInstalled, err := newBootstrapHostPackagePlan(p.directory, bootstrapHostInstallBase, complete)
+	allInstalled, err := newBootstrapHostPackagePlan("noble", p.directory, bootstrapHostInstallBase, complete)
 	if err != nil || allInstalled.needsInstall() || allInstalled.validateSimulation(bootstrapHostPackageSimulationFixture(allInstalled)) != nil {
 		t.Fatal("unchanged installed phase rejected", err)
 	}
@@ -311,7 +329,7 @@ func TestBootstrapHostPackageSimulationBindsExactLocalPlan(t *testing.T) {
 			step        bootstrapHostCommand
 			name, after string
 		}{{bootstrapHostInstallBase, "base", "after-base.tsv"}, {bootstrapHostInstallDocker, "docker", "after-docker.tsv"}} {
-			p, err := newBootstrapHostPackagePlan("/opt/package-cache", phase.step, before)
+			p, err := newBootstrapHostPackagePlan("noble", "/opt/package-cache", phase.step, before)
 			if err != nil || p.validateBefore(before) != nil || p.validateSimulation(read(directory, phase.name+"-simulation.log")) != nil {
 				t.Fatal("actual phase simulation rejected", phase.name, err)
 			}
@@ -323,7 +341,7 @@ func TestBootstrapHostPackageSimulationBindsExactLocalPlan(t *testing.T) {
 		}
 	}
 	if directory := os.Getenv("BOREALIS_TEST_HOST_PACKAGE_PREFLIGHT_EVIDENCE"); directory != "" {
-		p, err := newBootstrapHostPackagePreflightPlan("/archives", read(directory, "before.tsv"))
+		p, err := newBootstrapHostPackagePreflightPlan("noble", "/archives", read(directory, "before.tsv"))
 		if err != nil || p.validateSimulation(read(directory, "simulation.log")) != nil {
 			t.Fatal("actual whole-host simulation rejected", err)
 		}

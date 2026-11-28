@@ -306,7 +306,11 @@ func (c *clusterController) withPreparationArtifacts(parent context.Context, sna
 		return proof, nil
 	}
 	d.acquire = func(ctx context.Context, postgres string, check func(context.Context) error) (clusterSSHPreparationArtifactBytes, error) {
-		return acquireClusterSSHPreparationArtifacts(ctx, scratch, work.Baseline, version, postgres, check)
+		suite, err := preparationCohortPackageSuite(work.Proof.Cohort)
+		if err != nil {
+			return nil, err
+		}
+		return acquireClusterSSHPreparationArtifacts(ctx, scratch, work.Baseline, version, postgres, suite, check)
 	}
 	var required bool
 	if clusterBootstrapObject([]byte(work.Payload), map[string]any{"ssh_source_staging_required": &required}) != nil {
@@ -574,7 +578,7 @@ func (e clusterSSHReleaseStageFailure) Error() string {
 }
 func (e clusterSSHReleaseStageFailure) Unwrap() error { return e.cause }
 
-func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, expected clusterbootstrap.Expected, version, postgres string, check func(context.Context) error) (_ clusterSSHPreparationArtifactBytes, result error) {
+func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, expected clusterbootstrap.Expected, version, postgres, suite string, check func(context.Context) error) (_ clusterSSHPreparationArtifactBytes, result error) {
 	phase := "release authority check"
 	var closes []func() error
 	defer func() {
@@ -604,7 +608,7 @@ func acquireClusterSSHPreparationArtifacts(ctx context.Context, scratch string, 
 		return nil, clusterbootstrap.ErrPreparationConfig
 	}
 	phase = "host package inventory"
-	packages, err := resolveClusterSSHHostPackageInventory(ctx, expected)
+	packages, err := resolveClusterSSHHostPackageInventory(ctx, expected, suite)
 	if err != nil {
 		return nil, err
 	}

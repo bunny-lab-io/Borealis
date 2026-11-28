@@ -20,7 +20,7 @@ func TestBootstrapHostPackageApprovedInventoryBeforeEffects(t *testing.T) {
 			t.Run(fmt.Sprintf("preflight=%t/%s", preflight, mode), func(t *testing.T) {
 				plan, before := bootstrapHostPackagePlanFixture(t, bootstrapHostInstallBase, true)
 				if preflight {
-					plan, _ = newBootstrapHostPackagePreflightPlan(plan.directory, before)
+					plan, _ = newBootstrapHostPackagePreflightPlan("noble", plan.directory, before)
 				}
 				selection, err := clusterbootstrap.SelectHostPackages(before)
 				if err != nil {
@@ -56,7 +56,7 @@ func TestBootstrapHostPackageApprovedInventoryBeforeEffects(t *testing.T) {
 					installs++
 					return nil, nil
 				}
-				err = prepareBootstrapHostPackagesWith(context.Background(), plan.directory, bootstrapHostInstallBase, preflight,
+				err = prepareBootstrapHostPackagesWith(context.Background(), plan.directory, bootstrapHostInstallBase, preflight, "noble",
 					func(ctx context.Context) error { return ctx.Err() },
 					func(raw []byte) error { return validateBootstrapTargetPackages(approved, raw) }, read, run)
 				if (err == nil) != (mode == "approved") || (installs == 1) != (mode == "approved" && !preflight) {
@@ -89,9 +89,9 @@ func TestBootstrapHostPackageApprovedFirstEffectAndContinuation(t *testing.T) {
 				}
 				var plan *bootstrapHostPackagePlan
 				if phase == 0 {
-					plan, err = newBootstrapHostPackagePreflightPlan(base.directory, current)
+					plan, err = newBootstrapHostPackagePreflightPlan("noble", base.directory, current)
 				} else {
-					plan, err = newBootstrapHostPackagePlan(base.directory, phase, current)
+					plan, err = newBootstrapHostPackagePlan("noble", base.directory, phase, current)
 				}
 				if err != nil {
 					t.Fatal(err)
@@ -101,7 +101,7 @@ func TestBootstrapHostPackageApprovedFirstEffectAndContinuation(t *testing.T) {
 				if (approval == nil) != (phase == bootstrapHostInstallDocker && baseMissing) {
 					t.Fatal("original inventory checked after owned effects, or first effect unchecked")
 				}
-				err = prepareBootstrapHostPackagesWith(context.Background(), base.directory, phase, phase == 0,
+				err = prepareBootstrapHostPackagesWith(context.Background(), base.directory, phase, phase == 0, "noble",
 					func(ctx context.Context) error { return ctx.Err() }, approval,
 					func(context.Context) ([]byte, error) { return current, nil },
 					func(_ context.Context, _ bootstrapHostCommandSpec, simulate bool) ([]byte, error) {
@@ -135,12 +135,12 @@ func TestBootstrapHostPackageExecutionBoundaries(t *testing.T) {
 			plan, before := bootstrapHostPackagePlanFixture(t, bootstrapHostInstallBase, true)
 			preflight := mode == "preflight"
 			if preflight {
-				plan, _ = newBootstrapHostPackagePreflightPlan(plan.directory, before)
+				plan, _ = newBootstrapHostPackagePreflightPlan("noble", plan.directory, before)
 			}
 			after := bootstrapHostPackageResultFixture(plan, before)
 			if mode == "already installed" {
 				before = after
-				plan, _ = newBootstrapHostPackagePlan(plan.directory, bootstrapHostInstallBase, before)
+				plan, _ = newBootstrapHostPackagePlan("noble", plan.directory, bootstrapHostInstallBase, before)
 			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
@@ -193,7 +193,7 @@ func TestBootstrapHostPackageExecutionBoundaries(t *testing.T) {
 				lost = mode == "authority after install"
 				return nil, nil
 			}
-			err := prepareBootstrapHostPackagesWith(ctx, plan.directory, bootstrapHostInstallBase, preflight, check, nil, read, run)
+			err := prepareBootstrapHostPackagesWith(ctx, plan.directory, bootstrapHostInstallBase, preflight, "noble", check, nil, read, run)
 			valid := mode == "valid" || preflight || mode == "already installed"
 			if (err == nil) != valid || installs > 1 {
 				t.Fatal("wrong result or replay", calls, err)

@@ -58,18 +58,37 @@ def main():
 
     if not packages.bootstrap.REPOSITORY.fullmatch(args.repository) or not packages.bootstrap.RELEASE.fullmatch(args.release):
         raise ValueError("invalid published release selector")
-    plan, _ = packages.parse_plan((args.source / packages.LOCK).read_bytes())
     meta = immutable_release(args.repository, args.release)
-    (asset,) = [a for a in meta["assets"] if a["name"] == packages.ARCHIVE]
-    if (asset["state"] != "uploaded" or not re.fullmatch("sha256:[0-9a-f]{64}", asset["digest"])
-            or asset["size"] != packages.archive_size(plan["packages"])):
-        raise ValueError("published archive incompatible with target package lock")
+    locks = [(packages.LOCK, packages.ARCHIVE)]
+    if hasattr(packages, "RESOLUTE_LOCK") and (args.source / packages.RESOLUTE_LOCK).is_file():
+        locks.append((packages.RESOLUTE_LOCK, packages.RESOLUTE_ARCHIVE))
+    if args.output.exists():
+        raise ValueError("seed destination already exists")
     with tempfile.TemporaryDirectory(dir=args.output.parent) as private:
-        archive = Path(private) / packages.ARCHIVE
-        subprocess.run(["gh", "release", "download", args.release, "--repo", args.repository,
-                        "--pattern", packages.ARCHIVE, "--output", str(archive)], check=True)
-        unpack(archive, args.output, plan, asset["digest"][7:], asset["size"])
-    print(f"Verified {len(plan['packages'])} packages against the target lock")
+        stage = Path(private) / "verified"
+        if len(locks) > 1:
+            stage.mkdir(mode=0o700)
+        for lock, name in locks:
+            plan, _ = packages.parse_plan((args.source / lock).read_bytes())
+            target = stage / plan["suite"] if len(locks) > 1 else stage
+            assets = [a for a in meta["assets"] if a["name"] == name]
+            if not assets and plan["suite"] == "resolute":
+                # Older immutable releases carry only Noble. Acquire the new
+                # suite through the same target-locked HTTPS package reader.
+                target.mkdir(mode=0o700)
+                for pin in plan["packages"]:
+                    packages.download(pin, target / pin["file"], plan["suite"])
+            else:
+                (asset,) = assets
+                if (asset["state"] != "uploaded" or not re.fullmatch("sha256:[0-9a-f]{64}", asset["digest"])
+                        or asset["size"] != packages.archive_size(plan["packages"])):
+                    raise ValueError("published archive incompatible with target package lock")
+                archive = Path(private) / name
+                subprocess.run(["gh", "release", "download", args.release, "--repo", args.repository,
+                                "--pattern", name, "--output", str(archive)], check=True)
+                unpack(archive, target, plan, asset["digest"][7:], asset["size"])
+            print(f"Verified {len(plan['packages'])} {plan['suite']} packages against the target lock")
+        stage.rename(args.output)
 
 
 if __name__ == "__main__":

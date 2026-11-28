@@ -31,7 +31,11 @@ func validateBootstrapTargetPackages(approved *clusterbootstrap.HostPackageSelec
 	if approved == nil || approved.Validate() != nil {
 		return errBootstrapSource
 	}
-	observed, err := clusterbootstrap.SelectHostPackages(raw)
+	plan, _, err := approved.Plan()
+	if err != nil {
+		return errBootstrapSource
+	}
+	observed, err := clusterbootstrap.SelectHostPackagesForSuite(raw, plan.Suite)
 	if err != nil || observed.PlanSHA256 != approved.PlanSHA256 || observed.InventorySHA256 != approved.InventorySHA256 ||
 		!slices.Equal(observed.Missing, approved.Missing) {
 		return errBootstrapSource

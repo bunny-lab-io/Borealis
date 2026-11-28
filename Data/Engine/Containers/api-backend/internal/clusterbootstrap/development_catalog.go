@@ -81,6 +81,11 @@ func ParseDevelopmentCatalog(expected Expected, raw []byte) (*DevelopmentCatalog
 		Artifacts  map[string]json.RawMessage `json:"artifacts"`
 	}
 	paths := developmentPaths()
+	resolute := HostPackagePlan{Suite: "resolute"}
+	if _, ok := b.Inventories["host_package_resolute"]; ok {
+		paths[resolute.InventoryName()] = "host_package"
+		paths[resolute.ArchiveName()] = "host_package"
+	}
 	if json.Unmarshal(raw, &manifest) != nil || manifest.Schema != 1 || manifest.Channel != b.Channel || manifest.Kind != "candidate" ||
 		manifest.Repository != b.Repository || manifest.Source != b.Source || manifest.Tree != b.Tree || manifest.Platform != b.Platform {
 		return nil, ErrPreparationConfig
@@ -111,7 +116,11 @@ func ParseDevelopmentCatalog(expected Expected, raw []byte) (*DevelopmentCatalog
 		if name == DevelopmentHistoryName && obj.Bytes > MaxBundleBytes {
 			return nil, ErrPreparationConfig
 		}
-		if strings.HasSuffix(name, ".json") && obj.SHA256 != b.Inventories[family] {
+		inventoryKey := family
+		if name == resolute.InventoryName() {
+			inventoryKey = "host_package_resolute"
+		}
+		if strings.HasSuffix(name, ".json") && obj.SHA256 != b.Inventories[inventoryKey] {
 			return nil, ErrPreparationConfig
 		}
 		obj.ID, obj.Path = int64(i+1), path
@@ -278,11 +287,11 @@ func (c *DevelopmentCatalog) VerifyReadOnly(ctx context.Context, parent string) 
 						return ErrImageArchive
 					}
 				}
-			case HostPackageInventoryName:
+			case HostPackageInventoryName, (HostPackagePlan{Suite: "resolute"}).InventoryName():
 				var inv *HostPackageInventory
 				inv, err = ParseHostPackageInventory(raw, c.expected)
 				if err == nil {
-					a := c.assets[HostPackageArchiveName]
+					a := c.assets[inv.Archive().Name]
 					if a.SHA256 != inv.Archive().SHA256 || a.Bytes != inv.Archive().Size {
 						return ErrImageArchive
 					}

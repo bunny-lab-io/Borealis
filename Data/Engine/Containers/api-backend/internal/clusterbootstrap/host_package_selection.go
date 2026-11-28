@@ -30,7 +30,7 @@ func (s HostPackageSelection) Clone() HostPackageSelection {
 }
 
 func (s HostPackageSelection) Pins() ([]HostPackagePin, error) {
-	plan, digest, err := HostPackagePins()
+	plan, digest, err := s.Plan()
 	if s.ProfileSHA256 != "" && (!digestPattern.MatchString(s.ProfileSHA256) || s.ProfileSHA256 == strings.Repeat("0", 64)) {
 		return nil, ErrPreparationConfig
 	}
@@ -91,8 +91,12 @@ func ParseHostPackageState(raw []byte) (map[string]HostPackageState, error) {
 }
 
 func SelectHostPackages(raw []byte) (HostPackageSelection, error) {
+	return SelectHostPackagesForSuite(raw, "noble")
+}
+
+func SelectHostPackagesForSuite(raw []byte, suite string) (HostPackageSelection, error) {
 	states, err := ParseHostPackageState(raw)
-	plan, digest, pinErr := HostPackagePins()
+	plan, digest, pinErr := HostPackagePlanForSuite(suite)
 	if err != nil || pinErr != nil {
 		return HostPackageSelection{}, ErrPreparationConfig
 	}

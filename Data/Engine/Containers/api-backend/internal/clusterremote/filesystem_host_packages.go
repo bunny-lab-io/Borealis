@@ -8,12 +8,16 @@ import (
 // Only compiled, release-bound package metadata enters this script. There is
 // no request field for directory inventories and no second evidence receipt.
 // Native fixtures use this same composition and the actual compiled list.
-func persistentFilesystemLibraries() (string, error) {
-	directories, err := clusterbootstrap.HostPackageDirectories()
+func persistentFilesystemLibraries(version string) (string, error) {
+	suite, err := clusterbootstrap.HostPackageSuiteForVersion(version)
 	if err != nil {
 		return "", ErrFilesystem
 	}
-	raw, err := json.Marshal(directories)
+	plan, _, err := clusterbootstrap.HostPackagePlanForSuite(suite)
+	if err != nil {
+		return "", ErrFilesystem
+	}
+	raw, err := json.Marshal(plan.DataDirectories)
 	if err != nil {
 		return "", ErrFilesystem
 	}
@@ -25,8 +29,8 @@ func persistentFilesystemLibraries() (string, error) {
 		"\nPFS_PACKAGE_DIRECTORIES = " + string(raw) + "\nPFS_COPY_PATHS = " + string(copyPaths) + "\n" + filesystemHostPackageLibraryScript + packageProfileLibraryScript + persistentFilesystemLibraryScript, nil
 }
 
-func buildPersistentFilesystemScript(packageCopies bool) (string, error) {
-	library, err := persistentFilesystemLibraries()
+func buildPersistentFilesystemScript(packageCopies bool, version string) (string, error) {
+	library, err := persistentFilesystemLibraries(version)
 	if err != nil {
 		return "", err
 	}

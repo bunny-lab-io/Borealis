@@ -62,7 +62,11 @@ func clusterSSHPreparationArtifactConsumerForGates(snapshot clusterSSHPreparatio
 	cleanTargets, capacity, configuration func(context.Context, string) (string, error), source clusterSSHPreparationStorageGateSourceRead,
 	filesystems clusterSSHPreparationFilesystemReader, consume clusterSSHPreparationNativeGateConsumer) clusterSSHPreparationArtifactConsumer {
 	return func(ctx context.Context, artifacts clusterSSHPreparationArtifactGate, storageDemand clusterSSHPreparationArtifactDemandRead, helper clusterSSHPreparationArtifactGate) (clusterSSHPreparationReadinessReceipt, error) {
-		storage := newClusterSSHPreparationStorageRead(snapshot, check, source, preparationWaitingStorageDemand(storageDemand), filesystems)
+		suite, err := preparationCohortPackageSuite(snapshot.work.Proof.Cohort)
+		if err != nil {
+			return clusterSSHPreparationReadinessReceipt{}, err
+		}
+		storage := newClusterSSHPreparationStorageRead(snapshot, check, source, preparationWaitingStorageDemand(storageDemand, suite), filesystems)
 		gates := clusterSSHPreparationNativeGates(snapshot, artifacts, helper, cleanTargets, capacity, storage, configuration, source)
 		return consumeClusterSSHPreparationNativeGates(ctx, gates, consume)
 	}
@@ -70,7 +74,7 @@ func clusterSSHPreparationArtifactConsumerForGates(snapshot clusterSSHPreparatio
 
 // Build demand while the immutable artifact owner and the waiting proposal
 // are both live. Configuration is derived without acquiring a future worker lease.
-func preparationWaitingStorageDemand(artifacts clusterSSHPreparationArtifactDemandRead) clusterSSHPreparationCompleteStorageDemandRead {
+func preparationWaitingStorageDemand(artifacts clusterSSHPreparationArtifactDemandRead, suite string) clusterSSHPreparationCompleteStorageDemandRead {
 	return func(ctx context.Context, digest string, plan clusterbootstrap.PreparationPlan) ([]clusterSSHFilesystemDemand, error) {
 		if artifacts == nil || digest != plan.PlanSHA256 {
 			return nil, clusterbootstrap.ErrPreparationConfig
@@ -79,7 +83,7 @@ func preparationWaitingStorageDemand(artifacts clusterSSHPreparationArtifactDema
 		if err != nil || len(known) == 0 {
 			return nil, clusterbootstrap.ErrPreparationConfig
 		}
-		packages, _, err := clusterbootstrap.HostPackagePins()
+		packages, _, err := clusterbootstrap.HostPackagePlanForSuite(suite)
 		if err != nil {
 			return nil, err
 		}

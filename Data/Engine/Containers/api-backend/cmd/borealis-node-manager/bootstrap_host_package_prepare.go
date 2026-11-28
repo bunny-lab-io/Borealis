@@ -69,10 +69,10 @@ func withBootstrapAPTCacheMetadata(ctx context.Context, directory string, check 
 	return nil
 }
 
-func prepareBootstrapHostPackages(ctx context.Context, directory string, phase bootstrapHostCommand, preflight bool,
+func prepareBootstrapHostPackages(ctx context.Context, directory string, phase bootstrapHostCommand, preflight bool, suite string,
 	hostLock, identityLock *os.File, guard *clusterbootstrap.ExecutorGuard, identity clusterbootstrap.ExecutorIdentity, check func(context.Context) error,
 	approvedInventory func([]byte) error) error {
-	return prepareBootstrapHostPackagesWith(ctx, directory, phase, preflight, check, approvedInventory,
+	return prepareBootstrapHostPackagesWith(ctx, directory, phase, preflight, suite, check, approvedInventory,
 		func(ctx context.Context) ([]byte, error) { return readBootstrapDockerProbe(ctx, "packages") },
 		func(ctx context.Context, spec bootstrapHostCommandSpec, simulate bool) ([]byte, error) {
 			output := &bootstrapDockerOutput{}
@@ -88,7 +88,7 @@ func prepareBootstrapHostPackages(ctx context.Context, directory string, phase b
 		})
 }
 
-func prepareBootstrapHostPackagesWith(ctx context.Context, directory string, phase bootstrapHostCommand, preflight bool,
+func prepareBootstrapHostPackagesWith(ctx context.Context, directory string, phase bootstrapHostCommand, preflight bool, suite string,
 	check func(context.Context) error, approvedInventory func([]byte) error, read func(context.Context) ([]byte, error), run func(context.Context, bootstrapHostCommandSpec, bool) ([]byte, error)) error {
 	boundary := func() error {
 		if check == nil || ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
@@ -105,9 +105,9 @@ func prepareBootstrapHostPackagesWith(ctx context.Context, directory string, pha
 	}
 	var plan *bootstrapHostPackagePlan
 	if preflight {
-		plan, err = newBootstrapHostPackagePreflightPlan(directory, before)
+		plan, err = newBootstrapHostPackagePreflightPlan(suite, directory, before)
 	} else {
-		plan, err = newBootstrapHostPackagePlan(directory, phase, before)
+		plan, err = newBootstrapHostPackagePlan(suite, directory, phase, before)
 	}
 	if err != nil {
 		return errBootstrapSource

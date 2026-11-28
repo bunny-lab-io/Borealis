@@ -16,23 +16,44 @@ type clusterSSHHostPackageInventory struct {
 	assets    map[string]clusterBootstrapAsset
 }
 
+// The older single-artifact staging flow shares one package archive across
+// its cohort. Paired installation selects an independent inventory per host.
+func preparationCohortPackageSuite(cohort clusterSSHInspectionCohort) (string, error) {
+	var suite string
+	for _, item := range cohort.Targets {
+		observed, err := clusterbootstrap.HostPackageSuiteForVersion(item.Report.OSVersion)
+		if err != nil || item.Report.OSID != "ubuntu" || suite != "" && suite != observed {
+			return "", clusterbootstrap.ErrPreparationConfig
+		}
+		suite = observed
+	}
+	if suite == "" {
+		return "", clusterbootstrap.ErrPreparationConfig
+	}
+	return suite, nil
+}
+
 // Resolve only immutable release assets using existing publication custody.
 // Package versions and origins come from compiled reviewed pins, never from
 // current upstream repositories or a caller-supplied package list.
-func resolveClusterSSHHostPackageInventory(parent context.Context, expected clusterbootstrap.Expected) (clusterSSHHostPackageInventory, error) {
+func resolveClusterSSHHostPackageInventory(parent context.Context, expected clusterbootstrap.Expected, suite string) (clusterSSHHostPackageInventory, error) {
 	fail := func() (clusterSSHHostPackageInventory, error) {
 		return clusterSSHHostPackageInventory{}, clusterbootstrap.ErrImageArchive
 	}
 	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
 	defer cancel()
+	plan, _, err := clusterbootstrap.HostPackagePlanForSuite(suite)
+	if err != nil {
+		return fail()
+	}
 	assets, err := resolveClusterPackagedAssets(ctx, expected, map[string]int64{
-		clusterbootstrap.HostPackageInventoryName: clusterbootstrap.MaxImageInventoryBytes,
-		clusterbootstrap.HostPackageArchiveName:   clusterbootstrap.MaxImageArchiveBytes,
+		plan.InventoryName(): clusterbootstrap.MaxImageInventoryBytes,
+		plan.ArchiveName():   clusterbootstrap.MaxImageArchiveBytes,
 	})
 	if err != nil {
 		return fail()
 	}
-	asset := assets[clusterbootstrap.HostPackageInventoryName]
+	asset := assets[plan.InventoryName()]
 	response, err := openClusterPackagedAsset(ctx, asset, clusterbootstrap.MaxImageInventoryBytes)
 	if err != nil {
 		return fail()
@@ -48,8 +69,8 @@ func resolveClusterSSHHostPackageInventory(parent context.Context, expected clus
 		return fail()
 	}
 	archive := inventory.Archive()
-	asset = assets[clusterbootstrap.HostPackageArchiveName]
-	if asset.Size != archive.Size || asset.Digest != "sha256:"+archive.SHA256 || ctx.Err() != nil {
+	asset = assets[plan.ArchiveName()]
+	if archive.Name != plan.ArchiveName() || asset.Size != archive.Size || asset.Digest != "sha256:"+archive.SHA256 || ctx.Err() != nil {
 		return fail()
 	}
 	return clusterSSHHostPackageInventory{expected, inventory, assets}, nil
@@ -59,7 +80,7 @@ func (v clusterSSHHostPackageInventory) refresh(ctx context.Context) error {
 	if v.inventory == nil {
 		return clusterbootstrap.ErrImageArchive
 	}
-	fresh, err := resolveClusterSSHHostPackageInventory(ctx, v.expected)
+	fresh, err := resolveClusterSSHHostPackageInventory(ctx, v.expected, v.inventory.Suite())
 	if err != nil || !reflect.DeepEqual(v.assets, fresh.assets) {
 		return clusterbootstrap.ErrImageArchive
 	}
@@ -79,7 +100,7 @@ func (v clusterSSHHostPackageInventory) stage(ctx context.Context, parent string
 		if check(ctx) != nil {
 			return nil, clusterbootstrap.ErrImageArchive
 		}
-		response, err := openClusterPackagedAsset(ctx, v.assets[clusterbootstrap.HostPackageArchiveName], clusterbootstrap.MaxImageArchiveBytes)
+		response, err := openClusterPackagedAsset(ctx, v.assets[v.inventory.Archive().Name], clusterbootstrap.MaxImageArchiveBytes)
 		if err != nil {
 			return nil, err
 		}

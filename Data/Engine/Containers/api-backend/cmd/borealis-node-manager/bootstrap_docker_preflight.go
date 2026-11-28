@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -11,14 +12,11 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"syscall"
 	"time"
 )
 
-var bootstrapDockerSuite = regexp.MustCompile(`^[a-z][a-z0-9]{0,31}$`)
-var bootstrapDockerVersion = regexp.MustCompile(`^[0-9]{2}\.(04|10)$`)
 var bootstrapDockerPackage = regexp.MustCompile(`^[a-z0-9][a-z0-9+.-]{0,199}$`)
 
 const bootstrapDockerInventoryLimit = 2 << 20
@@ -149,12 +147,9 @@ func bootstrapDockerRelease(raw []byte) (string, error) {
 		values[key] = value
 	}
 	version := values["VERSION_ID"]
-	major, minor, ok := strings.Cut(version, ".")
-	year, yearErr := strconv.Atoi(major)
-	month, monthErr := strconv.Atoi(minor)
+	expectedSuite, err := clusterbootstrap.HostPackageSuiteForVersion(version)
 	suite := values["VERSION_CODENAME"]
-	if values["ID"] != "ubuntu" || !ok || !bootstrapDockerVersion.MatchString(version) || yearErr != nil || monthErr != nil ||
-		(year < 24 || year == 24 && month < 4) || month != 4 && month != 10 || !bootstrapDockerSuite.MatchString(suite) ||
+	if values["ID"] != "ubuntu" || err != nil || expectedSuite != suite ||
 		(values["UBUNTU_CODENAME"] != "" && values["UBUNTU_CODENAME"] != suite) {
 		return "", errBootstrapSource
 	}

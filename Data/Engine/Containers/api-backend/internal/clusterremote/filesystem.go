@@ -25,6 +25,7 @@ const filesystemIntegerLimit = uint64(1<<53 - 1)
 // Paths must be explicitly selected by the caller. Observation does not choose
 // installation or Longhorn paths, create directories, or reserve capacity.
 type FilesystemRequest struct {
+	OSVersion string
 	MachineID string
 	BootID    string
 	Paths     []string
@@ -182,6 +183,7 @@ type filesystemObservation struct {
 
 // No imported/serialized object can construct native acquisition provenance.
 type TargetFilesystem struct {
+	osVersion         string
 	wire              filesystemObservation
 	target            Target
 	key               HostKey
@@ -204,7 +206,7 @@ func (v TargetFilesystem) Evidence(notBefore time.Time, target Target, key HostK
 	}
 	if notBefore.IsZero() || v.started.Before(notBefore) || v.finished.Before(v.started) || v.finished.After(time.Now()) ||
 		v.finished.Sub(v.started) > 25*time.Second || request.Validate() != nil || target.Validate() != nil || key.Validate() != nil ||
-		v.target != target || v.key.Algorithm != key.Algorithm || v.key.Fingerprint != key.Fingerprint || !bytes.Equal(v.key.PublicKey, key.PublicKey) ||
+		v.osVersion != request.OSVersion || v.target != target || v.key.Algorithm != key.Algorithm || v.key.Fingerprint != key.Fingerprint || !bytes.Equal(v.key.PublicKey, key.PublicKey) ||
 		v.wire.Version != version || v.wire.MachineID != request.MachineID || v.wire.BootID != request.BootID || v.wire.Evidence.validate(request.Paths) != nil {
 		return FilesystemEvidence{}, ErrFilesystem
 	}
@@ -223,7 +225,11 @@ func filesystemCommand(request FilesystemRequest) (string, error) {
 	}
 	script := filesystemScript
 	if request.RequirePersistent {
-		script, err = buildPersistentFilesystemScript(request.RequirePackageCopies)
+		version := request.OSVersion
+		if version == "" {
+			version = "24.04"
+		} // Historical requests used the Noble inventory.
+		script, err = buildPersistentFilesystemScript(request.RequirePackageCopies, version)
 		if err != nil {
 			return "", ErrFilesystem
 		}
@@ -283,7 +289,7 @@ func (client *Client) InspectFilesystem(parent context.Context, sudoPassword []b
 		return TargetFilesystem{}, ErrFilesystem
 	}
 	canonical, err := json.Marshal(wire)
-	v := TargetFilesystem{wire: wire, target: expected, key: approved, started: started, finished: time.Now()}
+	v := TargetFilesystem{wire: wire, osVersion: request.OSVersion, target: expected, key: approved, started: started, finished: time.Now()}
 	if err != nil || !bytes.Equal(canonical, bytes.TrimSpace(raw)) || ctx.Err() != nil {
 		return TargetFilesystem{}, ErrFilesystem
 	}

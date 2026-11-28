@@ -18,20 +18,24 @@ if __name__ == "__main__":
 
 // This fixed program embeds only compiled pin identity, never caller selections.
 func preparationProposalPackageConstants() string {
-	plan, digest, err := clusterbootstrap.HostPackagePins()
-	if err != nil {
-		return "raise ValueError()\n"
+	plans := map[string]any{}
+	for _, suite := range []string{"noble", "resolute"} {
+		plan, digest, err := clusterbootstrap.HostPackagePlanForSuite(suite)
+		if err != nil || suite != plan.Suite {
+			return "raise ValueError()\n"
+		}
+		pins := make([][2]string, 0, len(plan.Packages))
+		for _, pin := range plan.Packages {
+			pins = append(pins, [2]string{pin.Name, pin.Architecture})
+		}
+		plans[suite] = []any{plan.OSVersion, digest, pins}
 	}
-	pins := make([][2]string, 0, len(plan.Packages))
-	for _, pin := range plan.Packages {
-		pins = append(pins, [2]string{pin.Name, pin.Architecture})
-	}
-	raw, err := json.Marshal([]any{digest, plan.Suite, pins})
+	raw, err := json.Marshal(plans)
 	if err != nil {
 		return "raise ValueError()\n"
 	}
 	// Keep pin data separate from the fixed Python program.
-	return "HOST_PACKAGE_PLAN_SHA256, HOST_PACKAGE_SUITE, HOST_PACKAGE_PINS = json.loads(base64.b64decode('" + base64.StdEncoding.EncodeToString(raw) + "', validate=True))\n"
+	return "HOST_PACKAGE_PLANS = json.loads(base64.b64decode('" + base64.StdEncoding.EncodeToString(raw) + "', validate=True))\n"
 }
 
 var preparationProposalLibraryScript = `import base64, hashlib, json, os, re, resource, selectors, stat, subprocess, sys, time
@@ -227,10 +231,11 @@ def platform(snapshot):
     require(tuple(map(int, version.split("."))) >= (24, 4) and re.fullmatch(r"[a-z][a-z0-9]{0,31}", suite))
     require(values.get("UBUNTU_CODENAME", suite) in ("", suite))
     require(command(["/usr/bin/dpkg", "--print-architecture"]) == b"amd64\n")
+    require(suite in HOST_PACKAGE_PLANS and version == HOST_PACKAGE_PLANS[suite][0])
     return suite
 
 def packages(suite):
-    require(suite == HOST_PACKAGE_SUITE)
+    _, plan_digest, pins = HOST_PACKAGE_PLANS[suite]
     raw = command(["/usr/bin/dpkg-query", "--show", "--showformat=${Package}\t${Architecture}\t${Status}\t${Version}\n"])
     seen, required, states = set(), {"apt": False, "dpkg": False, "base-files": False}, {}
     for line in text(raw, LIMIT)[:-1].split("\n"):
@@ -248,12 +253,12 @@ def packages(suite):
             required[name] = True
     require(all(required.values()))
     missing = []
-    for name, architecture in HOST_PACKAGE_PINS:
+    for name, architecture in pins:
         entries = states.get(name, [])
         require(not entries or entries == [(architecture, "install ok installed")])
         if not entries:
             missing.append(name)
-    return {"plan_sha256": HOST_PACKAGE_PLAN_SHA256, "inventory_sha256": digest(raw), "missing": sorted(missing)}
+    return {"plan_sha256": plan_digest, "inventory_sha256": digest(raw), "missing": sorted(missing)}
 
 def sources(snapshot):
     paths = []

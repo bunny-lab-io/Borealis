@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -124,6 +125,48 @@ func localSnapshotReleases(baseSHA, k3s, floor string) ([]map[string]any, error)
 	}
 	sort.Slice(out, func(i, j int) bool { return cleanText(out[i]["tag"]) < cleanText(out[j]["tag"]) })
 	return out, nil
+}
+
+// Untagged source installs have no calendar version. Only an immutable
+// published ancestor of the installed source can establish its rolling floor.
+func initialDevelopmentAncestor(ctx context.Context, installed, k3s string) (string, string, error) {
+	if !clusterControllerSHARegex.MatchString(installed) || !clusterK3sRE.MatchString(k3s) {
+		return "", "", errors.New("invalid installed development source")
+	}
+	// Match the bounded release-history window used by the development picker.
+	for page := 1; page <= 10; page++ {
+		var releases []clusterGitHubRelease
+		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=10&page=%d", clusterGitHubAPIBase(), clusterGitHubRepo(), page)
+		if err := clusterGitHubJSON(ctx, endpoint, &releases); err != nil {
+			return "", "", err
+		}
+		for _, release := range releases {
+			tag := release.TagName
+			channel := clusterReleaseChannel(tag)
+			if release.Draft || !release.Immutable || release.PublishedAt == "" || !textInSet(channel, "stable", "qualification") || release.Prerelease != (channel == "qualification") {
+				continue
+			}
+			item, err := hydrateClusterRelease(ctx, release, "", "", k3s)
+			if err != nil {
+				return "", "", err
+			}
+			if !coerceClusterBool(item["selectable"]) {
+				continue
+			}
+			sha := cleanText(item["commit_sha"])
+			ancestor, err := clusterReleaseDescendsFromBaseline(ctx, sha, installed)
+			if err != nil {
+				return "", "", err
+			}
+			if ancestor {
+				return tag, sha, nil
+			}
+		}
+		if len(releases) < 10 {
+			break
+		}
+	}
+	return "", "", errors.New("no compatible immutable release ancestor of installed development source")
 }
 
 func developmentVersionFloor(snapshot map[string]any) string {

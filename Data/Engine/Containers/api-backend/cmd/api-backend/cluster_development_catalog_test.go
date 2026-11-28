@@ -17,6 +17,16 @@ import (
 // Exercise the production reader and authenticated network broker. Only the
 // artifact payload and database custody decision are fixture inputs.
 func TestClusterDevelopmentCatalogRequiresCurrentAuthority(t *testing.T) {
+	for _, resolute := range []bool{false, true} {
+		name := "original Noble catalog"
+		if resolute {
+			name = "dual-suite catalog and fresh source baseline"
+		}
+		t.Run(name, func(t *testing.T) { testClusterDevelopmentCatalog(t, resolute) })
+	}
+}
+
+func testClusterDevelopmentCatalog(t *testing.T, resolute bool) {
 	parent := t.TempDir()
 	t.Setenv("BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES", parent)
 	t.Setenv("BOREALIS_OPERATOR_SECRET", sshBrokerTestSecret)
@@ -42,6 +52,15 @@ func TestClusterDevelopmentCatalogRequiresCurrentAuthority(t *testing.T) {
 		for _, n := range names {
 			objects[family+"/"+n] = map[string]any{"bytes": len(payload), "sha256": digest(payload)}
 		}
+	}
+	if resolute {
+		plan, _, err := clusterbootstrap.HostPackagePlanForSuite("resolute")
+		if err != nil {
+			t.Fatal(err)
+		}
+		inventories["host_package_resolute"] = digest([]byte("resolute inventory"))
+		objects["host_package/"+plan.InventoryName()] = map[string]any{"bytes": len("resolute inventory"), "sha256": inventories["host_package_resolute"]}
+		objects["host_package/"+plan.ArchiveName()] = map[string]any{"bytes": len(payload), "sha256": digest(payload)}
 	}
 	encode := func(v any) []byte {
 		b, e := json.Marshal(v)
@@ -75,6 +94,10 @@ func TestClusterDevelopmentCatalogRequiresCurrentAuthority(t *testing.T) {
 		t.Setenv("BOREALIS_GITHUB_API_BASE_URL", external.URL)
 		t.Setenv("BOREALIS_GITHUB_RAW_BASE_URL", external.URL)
 		store := &clusterTestStore{profile: operatorProfile{Username: "operator", Role: "Admin"}, snapshot: map[string]any{"baseline_release": "2026.11.1-rc.29", "baseline_sha": base, "active_size": int64(1), "config": map[string]any{"k3s_version": compat.RequiredK3sBaseline}}}
+		if resolute {
+			store.snapshot["baseline_release"] = "dev-" + base[:12]
+			store.snapshot["config"].(map[string]any)["development_version_floor"] = "2026.11.1"
+		}
 		auth, token := clusterTestAuth(t, store)
 		mux := http.NewServeMux()
 		registerServerClusterRoutes(mux, auth)
@@ -119,6 +142,9 @@ func TestClusterDevelopmentCatalogRequiresCurrentAuthority(t *testing.T) {
 			t.Fatal("forged release origin accepted")
 		}
 		store.snapshot["baseline_sha"] = tree
+		if resolute {
+			store.snapshot["baseline_release"] = "dev-" + tree[:12]
+		}
 		if w := post(); w.Code != 422 {
 			t.Fatalf("changed serving baseline %d", w.Code)
 		}

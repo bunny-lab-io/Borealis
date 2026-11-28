@@ -4342,6 +4342,7 @@ render_k3s_api_backend_bridge_manifest() {
   local source_sha="${10}"
   local probe_conformance="${11}"
   local k3s_version="${12}"
+  local development_catalog_enabled="${13:-false}"
   local service_host
   local replicas
   service_host="$(api_backend_service_dns_name)"
@@ -4506,6 +4507,8 @@ $(k3s_timezone_env_entries)
               value: "${k3s_version}"
             - name: BOREALIS_K3S_UPGRADE_IMAGE
               value: "${K3S_UPGRADE_IMAGE}"
+            - name: BOREALIS_DEVELOPMENT_CATALOG_ENABLED
+              value: "${development_catalog_enabled}"
             - name: BOREALIS_ENGINE_RELEASE_VERSION
               value: "${release_version}"
             - name: BOREALIS_ENGINE_SOURCE_SHA
@@ -4688,6 +4691,14 @@ ensure_k3s_api_backend_bridge() {
   traffic_owner="$(resolve_api_backend_traffic_owner)"
   service_host="$(api_backend_service_dns_name)"
   pids_limit="$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
+  local development_catalog_enabled=false
+  if [[ -f /etc/borealis/development-catalog.env ]]; then
+    development_catalog_enabled="$(python3 - "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" <<'PYMARKER'
+import runpy, sys
+print(str(runpy.run_path(sys.argv[1])["development_catalog_enabled"]()).lower())
+PYMARKER
+)" || die "Invalid development catalog opt-in."
+  fi
   release_version="$(engine_release_version)"
   source_sha="$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
   probe_conformance="$(k3s_probe_conformance_status)"
@@ -4712,6 +4723,7 @@ ensure_k3s_api_backend_bridge() {
       "pids_limit=${pids_limit}" \
       "traffic_owner=${traffic_owner}" \
       "release_version=${release_version}" \
+      "development_catalog_enabled=${development_catalog_enabled}" \
       "source_sha=${source_sha}" \
       "probe_conformance=${probe_conformance}" \
       "k3s_version=${k3s_version}" \
@@ -4751,6 +4763,7 @@ ensure_k3s_api_backend_bridge() {
     "${source_sha}" \
     "${probe_conformance}" \
     "${k3s_version}" \
+    "${development_catalog_enabled}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"

@@ -1,0 +1,2911 @@
+{
+  "os": "ubuntu",
+  "os_version": "26.04",
+  "packages": [
+    {
+      "name": "adduser",
+      "version": "3.153ubuntu1",
+      "architecture": "all",
+      "file": "adduser_3.153ubuntu1_all.deb",
+      "phase": "base",
+      "size": 194420,
+      "sha256": "78de3c5c3ec5657bcbdc10c2b2bcd9cedd78e6814182566f1522af422b26d3ce",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/a/adduser/adduser_3.153ubuntu1_all.deb",
+      "file_bytes": 348338,
+      "entries": 124,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 5733,
+          "link_bytes": 0,
+          "entries": 3
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 342605,
+          "link_bytes": 248,
+          "entries": 117
+        },
+        {
+          "path": "/var",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 3
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 10241,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "ca-certificates",
+      "version": "20260816ubuntu0.26.04.2",
+      "architecture": "all",
+      "file": "ca-certificates_20260816ubuntu0.26.04.2_all.deb",
+      "phase": "base",
+      "size": 138428,
+      "sha256": "a7e3bf769aec16ba21ca39cba180d6d311dafcbae68346a05f137c5cc26c9ca6",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/c/ca-certificates/ca-certificates_20260816ubuntu0.26.04.2_all.deb",
+      "file_bytes": 217594,
+      "entries": 157,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 5
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 217594,
+          "link_bytes": 0,
+          "entries": 151
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 57517,
+        "link_bytes": 0,
+        "entries": 8,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "containerd.io",
+      "version": "2.4.2-4~ubuntu.26.04~resolute",
+      "architecture": "amd64",
+      "file": "containerd.io_2.4.2-4~ubuntu.26.04~resolute_amd64.deb",
+      "phase": "docker",
+      "size": 23267508,
+      "sha256": "47921d44c78dcaa8c490025b1602655eed448a3ce3f8df104aeb1ec6025db96c",
+      "url": "https://download.docker.com/linux/ubuntu/dists/resolute/pool/stable/amd64/containerd.io_2.4.2-4~ubuntu.26.04~resolute_amd64.deb",
+      "file_bytes": 88999138,
+      "entries": 26,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 886,
+          "link_bytes": 0,
+          "entries": 3
+        },
+        {
+          "path": "/lib",
+          "file_bytes": 1242,
+          "link_bytes": 0,
+          "entries": 4
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 88997010,
+          "link_bytes": 0,
+          "entries": 18
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3224,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "curl",
+      "version": "8.18.0-1ubuntu2.8",
+      "architecture": "amd64",
+      "file": "curl_8.18.0-1ubuntu2.8_amd64.deb",
+      "phase": "base",
+      "size": 272502,
+      "sha256": "2c418a61d7165d0cde01d9cb05ae025cc41fc75ef6d3f095996bd045ba0945dc",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/c/curl/curl_8.18.0-1ubuntu2.8_amd64.deb",
+      "file_bytes": 491092,
+      "entries": 22,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 491092,
+          "link_bytes": 34,
+          "entries": 21
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1543,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "dirmngr",
+      "version": "2.4.8-4ubuntu3.1",
+      "architecture": "amd64",
+      "file": "dirmngr_2.4.8-4ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 326986,
+      "sha256": "0c21d2572880614763ce3dd23a2d6a96e25fc71ca038e2cdc0844cb017af0e17",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnupg2/dirmngr_2.4.8-4ubuntu3.1_amd64.deb",
+      "file_bytes": 699187,
+      "entries": 29,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 699187,
+          "link_bytes": 55,
+          "entries": 28
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 5279,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "docker-buildx-plugin",
+      "version": "0.39.1-1~ubuntu.26.04~resolute",
+      "architecture": "amd64",
+      "file": "docker-buildx-plugin_0.39.1-1~ubuntu.26.04~resolute_amd64.deb",
+      "phase": "docker",
+      "size": 18004300,
+      "sha256": "969bbbb85df032d7a3f79153e009fb42ad1e659fafcc2d15a8f73420bbde78a4",
+      "url": "https://download.docker.com/linux/ubuntu/dists/resolute/pool/stable/amd64/docker-buildx-plugin_0.39.1-1~ubuntu.26.04~resolute_amd64.deb",
+      "file_bytes": 75257534,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 75257534,
+          "link_bytes": 0,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 603,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "docker-ce",
+      "version": "5:29.10.1-1~ubuntu.26.04~resolute",
+      "architecture": "amd64",
+      "file": "docker-ce_5%3a29.10.1-1~ubuntu.26.04~resolute_amd64.deb",
+      "phase": "docker",
+      "size": 24988276,
+      "sha256": "0cec06fead1cfeb293609d3cf0989c8498096ff7392e4266d2faf8f2dfe28e3a",
+      "url": "https://download.docker.com/linux/ubuntu/dists/resolute/pool/stable/amd64/docker-ce_29.10.1-1~ubuntu.26.04~resolute_amd64.deb",
+      "file_bytes": 115499320,
+      "entries": 27,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 3588,
+          "link_bytes": 0,
+          "entries": 6
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 115495732,
+          "link_bytes": 0,
+          "entries": 20
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 7947,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "docker-ce-cli",
+      "version": "5:29.10.1-1~ubuntu.26.04~resolute",
+      "architecture": "amd64",
+      "file": "docker-ce-cli_5%3a29.10.1-1~ubuntu.26.04~resolute_amd64.deb",
+      "phase": "docker",
+      "size": 8613740,
+      "sha256": "c051d6e212de9ab3b7bbe3d25119303b968f6ba701fe2bc4a74f2b09eef52d6c",
+      "url": "https://download.docker.com/linux/ubuntu/dists/resolute/pool/stable/amd64/docker-ce-cli_29.10.1-1~ubuntu.26.04~resolute_amd64.deb",
+      "file_bytes": 38099745,
+      "entries": 202,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 38099745,
+          "link_bytes": 0,
+          "entries": 201
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 15226,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "gnupg",
+      "version": "2.4.8-4ubuntu3.1",
+      "architecture": "all",
+      "file": "gnupg_2.4.8-4ubuntu3.1_all.deb",
+      "phase": "base",
+      "size": 310662,
+      "sha256": "f8e4e754a843b1334e90092aac4c24433836d0756c996f37822d33905f2596e5",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnupg2/gnupg_2.4.8-4ubuntu3.1_all.deb",
+      "file_bytes": 338691,
+      "entries": 50,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 338691,
+          "link_bytes": 205,
+          "entries": 49
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 4128,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "gpg",
+      "version": "2.4.8-4ubuntu3.1",
+      "architecture": "amd64",
+      "file": "gpg_2.4.8-4ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 636848,
+      "sha256": "fb8da4f691b6e2139fa5cdf7f54d000ef1b7b27753efb2dbdc5a9546057a62c6",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnupg2/gpg_2.4.8-4ubuntu3.1_amd64.deb",
+      "file_bytes": 1432005,
+      "entries": 25,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 1432005,
+          "link_bytes": 55,
+          "entries": 24
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3285,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "gpg-agent",
+      "version": "2.4.8-4ubuntu3.1",
+      "architecture": "amd64",
+      "file": "gpg-agent_2.4.8-4ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 235744,
+      "sha256": "35170497c2191fa8f4d9e25f867057d93d8f59a6529b0dee96788d0c02866db6",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnupg2/gpg-agent_2.4.8-4ubuntu3.1_amd64.deb",
+      "file_bytes": 615017,
+      "entries": 44,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 2344,
+          "link_bytes": 0,
+          "entries": 7
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 612673,
+          "link_bytes": 110,
+          "entries": 36
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6919,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "gpgconf",
+      "version": "2.4.8-4ubuntu3.1",
+      "architecture": "amd64",
+      "file": "gpgconf_2.4.8-4ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 106310,
+      "sha256": "3747890fd79d7c64ee7e3496e54742dd482cff01574d885b84adb645c7ade7af",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnupg2/gpgconf_2.4.8-4ubuntu3.1_amd64.deb",
+      "file_bytes": 251150,
+      "entries": 22,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 251150,
+          "link_bytes": 0,
+          "entries": 21
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1627,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "gpgsm",
+      "version": "2.4.8-4ubuntu3.1",
+      "architecture": "amd64",
+      "file": "gpgsm_2.4.8-4ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 238830,
+      "sha256": "e36eedde45b1174a591f55ce94beef99dfb89d58308b96e1354a1e4588820225",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnupg2/gpgsm_2.4.8-4ubuntu3.1_amd64.deb",
+      "file_bytes": 560684,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 560684,
+          "link_bytes": 55,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1302,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "iptables",
+      "version": "1.8.11-2ubuntu3",
+      "architecture": "amd64",
+      "file": "iptables_1.8.11-2ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 381074,
+      "sha256": "187b16f9375f53ce6a1618a29de52bb177b620589ada29e4a3e25de5d594e66f",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/iptables/iptables_1.8.11-2ubuntu3_amd64.deb",
+      "file_bytes": 2339445,
+      "entries": 216,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 2339445,
+          "link_bytes": 1101,
+          "entries": 215
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 15390,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "keyutils",
+      "version": "1.6.3-6ubuntu3",
+      "architecture": "amd64",
+      "file": "keyutils_1.6.3-6ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 56806,
+      "sha256": "28f744ec22b3ff0cfb42b3f450cc05f1b162886eaef7f4635999589a97fa322c",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/keyutils/keyutils_1.6.3-6ubuntu3_amd64.deb",
+      "file_bytes": 146987,
+      "entries": 30,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 1787,
+          "link_bytes": 0,
+          "entries": 4
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 145200,
+          "link_bytes": 35,
+          "entries": 25
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1584,
+        "link_bytes": 0,
+        "entries": 3,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libassuan9",
+      "version": "3.0.2-2build1",
+      "architecture": "amd64",
+      "file": "libassuan9_3.0.2-2build1_amd64.deb",
+      "phase": "base",
+      "size": 41328,
+      "sha256": "5ff0d3cfbca10a8f0e0e47b7d8adeb01645d0542caf02775e820e1c983a47058",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/liba/libassuan/libassuan9_3.0.2-2build1_amd64.deb",
+      "file_bytes": 98602,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 98602,
+          "link_bytes": 18,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 5242,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libbrotli1",
+      "version": "1.2.0-3ubuntu0.1",
+      "architecture": "amd64",
+      "file": "libbrotli1_1.2.0-3ubuntu0.1_amd64.deb",
+      "phase": "base",
+      "size": 343132,
+      "sha256": "bedeef1cf3268f90338c411cdb0a45b224d0660fd2240f310f380316c8244606",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/b/brotli/libbrotli1_1.2.0-3ubuntu0.1_amd64.deb",
+      "file_bytes": 886640,
+      "entries": 18,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 886640,
+          "link_bytes": 66,
+          "entries": 17
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3099,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libcap2",
+      "version": "1:2.75-10ubuntu2",
+      "architecture": "amd64",
+      "file": "libcap2_1%3a2.75-10ubuntu2_amd64.deb",
+      "phase": "base",
+      "size": 29264,
+      "sha256": "150603a0792b1d22aa0bde0a26c27b413018c799284003e4b43cba587a5b3a18",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libc/libcap2/libcap2_2.75-10ubuntu2_amd64.deb",
+      "file_bytes": 77519,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 77519,
+          "link_bytes": 28,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3453,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libcurl4t64",
+      "version": "8.18.0-1ubuntu2.8",
+      "architecture": "amd64",
+      "file": "libcurl4t64_8.18.0-1ubuntu2.8_amd64.deb",
+      "phase": "base",
+      "size": 429688,
+      "sha256": "7c0b37592f83a629cc22f0c98effa176da9edbd6d77b3f38184a9d0ddc5e0266",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/c/curl/libcurl4t64_8.18.0-1ubuntu2.8_amd64.deb",
+      "file_bytes": 1035866,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 1035866,
+          "link_bytes": 16,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6040,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libedit2",
+      "version": "3.1-20251016-1",
+      "architecture": "amd64",
+      "file": "libedit2_3.1-20251016-1_amd64.deb",
+      "phase": "docker",
+      "size": 96920,
+      "sha256": "22338fcbcaae99f67ca7b2e20d1730bc29d3c02bcd2414e457f99be96442ee29",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libe/libedit/libedit2_3.1-20251016-1_amd64.deb",
+      "file_bytes": 234829,
+      "entries": 20,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 234829,
+          "link_bytes": 17,
+          "entries": 19
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 9183,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libevent-core-2.1-7t64",
+      "version": "2.1.12-stable-10ubuntu0.2",
+      "architecture": "amd64",
+      "file": "libevent-core-2.1-7t64_2.1.12-stable-10ubuntu0.2_amd64.deb",
+      "phase": "base",
+      "size": 92624,
+      "sha256": "234686b4ff695c2a1c937282ef4e8e2e37abef8a064dfa8a6eaa365ab6a45400",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libe/libevent/libevent-core-2.1-7t64_2.1.12-stable-10ubuntu0.2_amd64.deb",
+      "file_bytes": 229827,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 229827,
+          "link_bytes": 26,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 19441,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libexpat1",
+      "version": "2.7.4-1ubuntu0.3",
+      "architecture": "amd64",
+      "file": "libexpat1_2.7.4-1ubuntu0.3_amd64.deb",
+      "phase": "base",
+      "size": 103386,
+      "sha256": "9204c4d870591e984903b3ebb78c5b1bcd684f3722acc014d5b59df4cf78b55e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/e/expat/libexpat1_2.7.4-1ubuntu0.3_amd64.deb",
+      "file_bytes": 388775,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 388775,
+          "link_bytes": 37,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6535,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libffi8",
+      "version": "3.5.2-4",
+      "architecture": "amd64",
+      "file": "libffi8_3.5.2-4_amd64.deb",
+      "phase": "base",
+      "size": 26348,
+      "sha256": "4a7423124bbd459c0aa38b7389ec7802fa6899654767a95fc27de70967fedd48",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libf/libffi/libffi8_3.5.2-4_amd64.deb",
+      "file_bytes": 75316,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 75316,
+          "link_bytes": 15,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2974,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libgnutls30t64",
+      "version": "3.8.12-2ubuntu1.1",
+      "architecture": "amd64",
+      "file": "libgnutls30t64_3.8.12-2ubuntu1.1_amd64.deb",
+      "phase": "base",
+      "size": 1028572,
+      "sha256": "b08d4e2842cd53dbe1565a46bd11d6f7ecb36bc08b236802ae4da744cae9f691",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/g/gnutls28/libgnutls30t64_3.8.12-2ubuntu1.1_amd64.deb",
+      "file_bytes": 2345476,
+      "entries": 21,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 119,
+          "link_bytes": 0,
+          "entries": 3
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 2345357,
+          "link_bytes": 20,
+          "entries": 17
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 69399,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libgssapi-krb5-2",
+      "version": "1.22.1-2ubuntu4.3",
+      "architecture": "amd64",
+      "file": "libgssapi-krb5-2_1.22.1-2ubuntu4.3_amd64.deb",
+      "phase": "base",
+      "size": 146898,
+      "sha256": "7642d15f6b5271aad1d5cdb808a7de789ebdebf00d089a661fed5646525926ca",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libgssapi-krb5-2_1.22.1-2ubuntu4.3_amd64.deb",
+      "file_bytes": 418263,
+      "entries": 18,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 3
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 418263,
+          "link_bytes": 92,
+          "entries": 14
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 10527,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libhogweed6t64",
+      "version": "3.10.2-1",
+      "architecture": "amd64",
+      "file": "libhogweed6t64_3.10.2-1_amd64.deb",
+      "phase": "base",
+      "size": 200902,
+      "sha256": "1c8c808ab24ff3018ac886e3f311edee0f2d4d97d12d3908be52343e89807046",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nettle/libhogweed6t64_3.10.2-1_amd64.deb",
+      "file_bytes": 325749,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 325749,
+          "link_bytes": 54,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 15135,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libidn2-0",
+      "version": "2.3.8-4build1",
+      "architecture": "amd64",
+      "file": "libidn2-0_2.3.8-4build1_amd64.deb",
+      "phase": "base",
+      "size": 67564,
+      "sha256": "92bdac0f443a648859d06dee3defb9c96864fd76df6cfe617ca70bb261344767",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libi/libidn2/libidn2-0_2.3.8-4build1_amd64.deb",
+      "file_bytes": 153292,
+      "entries": 17,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 153292,
+          "link_bytes": 16,
+          "entries": 16
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2169,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libip4tc2",
+      "version": "1.8.11-2ubuntu3",
+      "architecture": "amd64",
+      "file": "libip4tc2_1.8.11-2ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 24182,
+      "sha256": "be25148d60125f6866dfa7940f3f1371fff4b0e8a1a9500780ad50cb8aaa0895",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/iptables/libip4tc2_1.8.11-2ubuntu3_amd64.deb",
+      "file_bytes": 55430,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 55430,
+          "link_bytes": 17,
+          "entries": 11
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2140,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libip6tc2",
+      "version": "1.8.11-2ubuntu3",
+      "architecture": "amd64",
+      "file": "libip6tc2_1.8.11-2ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 24446,
+      "sha256": "3d9fdb3171f1167ab3f5182de11db63bcd27aae71838618f3d46806b3134428e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/iptables/libip6tc2_1.8.11-2ubuntu3_amd64.deb",
+      "file_bytes": 55432,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 55432,
+          "link_bytes": 17,
+          "entries": 11
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2170,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libisns0t64",
+      "version": "0.101-2.1ubuntu0.1",
+      "architecture": "amd64",
+      "file": "libisns0t64_0.101-2.1ubuntu0.1_amd64.deb",
+      "phase": "base",
+      "size": 94208,
+      "sha256": "e8a4c2d2bfc5b9f04dc0b926af5e5c966e54159fd49fe564016cc4670523d2b8",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/open-isns/libisns0t64_0.101-2.1ubuntu0.1_amd64.deb",
+      "file_bytes": 496150,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 496150,
+          "link_bytes": 0,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1321,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libjansson4",
+      "version": "2.14-2build4",
+      "architecture": "amd64",
+      "file": "libjansson4_2.14-2build4_amd64.deb",
+      "phase": "docker",
+      "size": 33250,
+      "sha256": "1dc986ac3cf112384919d1a339a952e8a86bede9890a4489c016fdc266a036ca",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/j/jansson/libjansson4_2.14-2build4_amd64.deb",
+      "file_bytes": 78304,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 78304,
+          "link_bytes": 20,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 4454,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libk5crypto3",
+      "version": "1.22.1-2ubuntu4.3",
+      "architecture": "amd64",
+      "file": "libk5crypto3_1.22.1-2ubuntu4.3_amd64.deb",
+      "phase": "base",
+      "size": 82044,
+      "sha256": "97e66520676a212fb6a3f0a9c3b1a8af998e056d99147b4c58e64d922653e745",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libk5crypto3_1.22.1-2ubuntu4.3_amd64.deb",
+      "file_bytes": 241775,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 241775,
+          "link_bytes": 89,
+          "entries": 11
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6345,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libkeyutils1",
+      "version": "1.6.3-6ubuntu3",
+      "architecture": "amd64",
+      "file": "libkeyutils1_1.6.3-6ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 10634,
+      "sha256": "ea7d3cc642ffe2459c35a85c894f80e92499b9eba13bdcb225e0aa751c0970be",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/keyutils/libkeyutils1_1.6.3-6ubuntu3_amd64.deb",
+      "file_bytes": 26641,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 26641,
+          "link_bytes": 19,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3197,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libkmod2",
+      "version": "34.2-2ubuntu2",
+      "architecture": "amd64",
+      "file": "libkmod2_34.2-2ubuntu2_amd64.deb",
+      "phase": "base",
+      "size": 50890,
+      "sha256": "bb55dd5908866cf5b76b642ddfcb494ab35adb43ccba07431116398b373d4845",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/kmod/libkmod2_34.2-2ubuntu2_amd64.deb",
+      "file_bytes": 115805,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 115805,
+          "link_bytes": 16,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3952,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libkrb5-3",
+      "version": "1.22.1-2ubuntu4.3",
+      "architecture": "amd64",
+      "file": "libkrb5-3_1.22.1-2ubuntu4.3_amd64.deb",
+      "phase": "base",
+      "size": 361144,
+      "sha256": "afbdb83f74296168ff6305ca27b00f7fc5c37f9a3c78eea040d2b8aa38ae73cd",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libkrb5-3_1.22.1-2ubuntu4.3_amd64.deb",
+      "file_bytes": 1020345,
+      "entries": 22,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 1020345,
+          "link_bytes": 85,
+          "entries": 21
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 32115,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libkrb5support0",
+      "version": "1.22.1-2ubuntu4.3",
+      "architecture": "amd64",
+      "file": "libkrb5support0_1.22.1-2ubuntu4.3_amd64.deb",
+      "phase": "base",
+      "size": 34792,
+      "sha256": "927163c6408e694844f42e570130bbeef18f428c4ed146fd0f6da4f2abcae7f3",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/k/krb5/libkrb5support0_1.22.1-2ubuntu4.3_amd64.deb",
+      "file_bytes": 119716,
+      "entries": 15,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 119716,
+          "link_bytes": 21,
+          "entries": 14
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6817,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libksba8",
+      "version": "1.6.7-2build1",
+      "architecture": "amd64",
+      "file": "libksba8_1.6.7-2build1_amd64.deb",
+      "phase": "base",
+      "size": 124944,
+      "sha256": "50c755317b3848155b6e4a88a09706b91f55426a474b932e4ee57077dbf39d22",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libk/libksba/libksba8_1.6.7-2build1_amd64.deb",
+      "file_bytes": 296438,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 296438,
+          "link_bytes": 17,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 7619,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libldap-common",
+      "version": "2.6.10+dfsg-1ubuntu5",
+      "architecture": "all",
+      "file": "libldap-common_2.6.10+dfsg-1ubuntu5_all.deb",
+      "phase": "base",
+      "size": 36036,
+      "sha256": "919b209f5040c1dca1d9c3912521e4bc476028c2e16905ab09347004a599a722",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/openldap/libldap-common_2.6.10+dfsg-1ubuntu5_all.deb",
+      "file_bytes": 86673,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 247,
+          "link_bytes": 0,
+          "entries": 3
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 86426,
+          "link_bytes": 0,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 862,
+        "link_bytes": 0,
+        "entries": 3,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libldap2",
+      "version": "2.6.10+dfsg-1ubuntu5",
+      "architecture": "amd64",
+      "file": "libldap2_2.6.10+dfsg-1ubuntu5_amd64.deb",
+      "phase": "base",
+      "size": 204284,
+      "sha256": "8d3a361e8655a0ff4a390243059949fa6f22d42d0e266f58b57c124eb21d2993",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/openldap/libldap2_2.6.10+dfsg-1ubuntu5_amd64.deb",
+      "file_bytes": 537281,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 537281,
+          "link_bytes": 36,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 30707,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libmnl0",
+      "version": "1.0.5-3build1",
+      "architecture": "amd64",
+      "file": "libmnl0_1.0.5-3build1_amd64.deb",
+      "phase": "base",
+      "size": 12560,
+      "sha256": "ab5e2781b0e2a2155cf154c658a2e6cf419d95a28c3121aefb159df6453102e5",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libm/libmnl/libmnl0_1.0.5-3build1_amd64.deb",
+      "file_bytes": 31220,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 31220,
+          "link_bytes": 15,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 4850,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnetfilter-conntrack3",
+      "version": "1.1.1-1",
+      "architecture": "amd64",
+      "file": "libnetfilter-conntrack3_1.1.1-1_amd64.deb",
+      "phase": "base",
+      "size": 47520,
+      "sha256": "facfd45a7cf6bab8ef30adbe693d6486f22e5253263f9d53b4e70b53f768970e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libn/libnetfilter-conntrack/libnetfilter-conntrack3_1.1.1-1_amd64.deb",
+      "file_bytes": 133063,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 133063,
+          "link_bytes": 31,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 5974,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnettle8t64",
+      "version": "3.10.2-1",
+      "architecture": "amd64",
+      "file": "libnettle8t64_3.10.2-1_amd64.deb",
+      "phase": "base",
+      "size": 185378,
+      "sha256": "83a2a924c11759a2ed6e6f98f456d28e1b026974ce9e6e7ef12c9ac43b2d543e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nettle/libnettle8t64_3.10.2-1_amd64.deb",
+      "file_bytes": 407011,
+      "entries": 16,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 407011,
+          "link_bytes": 17,
+          "entries": 15
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 25457,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnfnetlink0",
+      "version": "1.0.2-3build1",
+      "architecture": "amd64",
+      "file": "libnfnetlink0_1.0.2-3build1_amd64.deb",
+      "phase": "base",
+      "size": 15078,
+      "sha256": "e76b638fef2c1ebf78260972a52c4716df5752b29a952aeddc0c091a74f179c2",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libn/libnfnetlink/libnfnetlink0_1.0.2-3build1_amd64.deb",
+      "file_bytes": 37133,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 37133,
+          "link_bytes": 21,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3120,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnfsidmap1",
+      "version": "1:2.8.5-1ubuntu1",
+      "architecture": "amd64",
+      "file": "libnfsidmap1_1%3a2.8.5-1ubuntu1_amd64.deb",
+      "phase": "base",
+      "size": 51412,
+      "sha256": "66f6a767957ef82e42b549d9f6444d968fc0517f79b7147a80049e6e75df2738",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nfs-utils/libnfsidmap1_2.8.5-1ubuntu1_amd64.deb",
+      "file_bytes": 170090,
+      "entries": 19,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 170090,
+          "link_bytes": 20,
+          "entries": 18
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1369,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnftables1",
+      "version": "1.1.6-1",
+      "architecture": "amd64",
+      "file": "libnftables1_1.1.6-1_amd64.deb",
+      "phase": "docker",
+      "size": 390468,
+      "sha256": "0e5abb5719052d9f12aadf91a3f3d5192a2e85d035ee81d07c3055a0f79d8b8f",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nftables/libnftables1_1.1.6-1_amd64.deb",
+      "file_bytes": 1090686,
+      "entries": 19,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 1090686,
+          "link_bytes": 20,
+          "entries": 18
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2997,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnftnl11",
+      "version": "1.3.1-1",
+      "architecture": "amd64",
+      "file": "libnftnl11_1.3.1-1_amd64.deb",
+      "phase": "base",
+      "size": 72288,
+      "sha256": "a2f4d4a4ce3fac7e473c8de60a3d8948a58e9850cd8e2ced17263aa73dda7199",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libn/libnftnl/libnftnl11_1.3.1-1_amd64.deb",
+      "file_bytes": 227748,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 227748,
+          "link_bytes": 18,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 15292,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnghttp2-14",
+      "version": "1.68.0-2ubuntu0.2",
+      "architecture": "amd64",
+      "file": "libnghttp2-14_1.68.0-2ubuntu0.2_amd64.deb",
+      "phase": "base",
+      "size": 71038,
+      "sha256": "9c92ca4435998b7981cf81f957177b71079563b022c282a4b8b7829113a5d08e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nghttp2/libnghttp2-14_1.68.0-2ubuntu0.2_amd64.deb",
+      "file_bytes": 178042,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 178042,
+          "link_bytes": 21,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 9712,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libnpth0t64",
+      "version": "1.8-3build1",
+      "architecture": "amd64",
+      "file": "libnpth0t64_1.8-3build1_amd64.deb",
+      "phase": "base",
+      "size": 9302,
+      "sha256": "25d85e79218e7002666f75f793c180c377847a802cc6b3278575d151629dc825",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/npth/libnpth0t64_1.8-3build1_amd64.deb",
+      "file_bytes": 25405,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 25405,
+          "link_bytes": 16,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2459,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libopeniscsiusr",
+      "version": "2.1.11-3ubuntu3.1",
+      "architecture": "amd64",
+      "file": "libopeniscsiusr_2.1.11-3ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 46190,
+      "sha256": "07b2aafc1c73c7f64851101b074d7b4a17c94ba82679aced3cfb707c872f8ee3",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/open-iscsi/libopeniscsiusr_2.1.11-3ubuntu3.1_amd64.deb",
+      "file_bytes": 150753,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 150753,
+          "link_bytes": 24,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1642,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libp11-kit0",
+      "version": "0.26.2-2",
+      "architecture": "amd64",
+      "file": "libp11-kit0_0.26.2-2_amd64.deb",
+      "phase": "base",
+      "size": 312508,
+      "sha256": "e70d3422e24b267293215134458f340944bf10e92b27147594c69a7dd2823089",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/p11-kit/libp11-kit0_0.26.2-2_amd64.deb",
+      "file_bytes": 1957377,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 1957377,
+          "link_bytes": 19,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6353,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libpsl5t64",
+      "version": "0.21.2-1.1build2",
+      "architecture": "amd64",
+      "file": "libpsl5t64_0.21.2-1.1build2_amd64.deb",
+      "phase": "base",
+      "size": 59510,
+      "sha256": "1ae62705714f660ecdfd70273fce5b226b6cb7b9fe53776531799093edc99774",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libp/libpsl/libpsl5t64_0.21.2-1.1build2_amd64.deb",
+      "file_bytes": 88666,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 88666,
+          "link_bytes": 15,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2118,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libpython3-stdlib",
+      "version": "3.14.3-0ubuntu2",
+      "architecture": "amd64",
+      "file": "libpython3-stdlib_3.14.3-0ubuntu2_amd64.deb",
+      "phase": "base",
+      "size": 8476,
+      "sha256": "75d0c4c28732f8e08d5da25a47676dbe923e4b15a8f7a77110ab370325889df5",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3-defaults/libpython3-stdlib_3.14.3-0ubuntu2_amd64.deb",
+      "file_bytes": 18793,
+      "entries": 8,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 18793,
+          "link_bytes": 0,
+          "entries": 7
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 941,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libpython3.14-minimal",
+      "version": "3.14.4-1ubuntu0.2",
+      "architecture": "amd64",
+      "file": "libpython3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb",
+      "phase": "base",
+      "size": 916446,
+      "sha256": "fac6f0728cf9490a7a698e6b343e4140283e92355b060193c04f5770a666df8a",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.14/libpython3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb",
+      "file_bytes": 5567887,
+      "entries": 343,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 155,
+          "link_bytes": 0,
+          "entries": 3
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 5567732,
+          "link_bytes": 73,
+          "entries": 339
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 24894,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libpython3.14-stdlib",
+      "version": "3.14.4-1ubuntu0.2",
+      "architecture": "amd64",
+      "file": "libpython3.14-stdlib_3.14.4-1ubuntu0.2_amd64.deb",
+      "phase": "base",
+      "size": 2415042,
+      "sha256": "3c267ef0f902f763c3615cbf28dd6fe91d2e4f603075d7f03db99f8d4eb66f46",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.14/libpython3.14-stdlib_3.14.4-1ubuntu0.2_amd64.deb",
+      "file_bytes": 10116892,
+      "entries": 424,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 10116892,
+          "link_bytes": 21,
+          "entries": 423
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 32081,
+        "link_bytes": 0,
+        "entries": 3,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libreadline8t64",
+      "version": "8.3-4",
+      "architecture": "amd64",
+      "file": "libreadline8t64_8.3-4_amd64.deb",
+      "phase": "base",
+      "size": 164290,
+      "sha256": "260b3333e9f714252593b83fb31d2571097b64d337d0d7100aae7349029821fc",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/r/readline/libreadline8t64_8.3-4_amd64.deb",
+      "file_bytes": 433882,
+      "entries": 18,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 433882,
+          "link_bytes": 35,
+          "entries": 17
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 28768,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "librtmp1",
+      "version": "2.4+20151223.gitfa8646d.1-3",
+      "architecture": "amd64",
+      "file": "librtmp1_2.4+20151223.gitfa8646d.1-3_amd64.deb",
+      "phase": "base",
+      "size": 58970,
+      "sha256": "77cbd0ddf7e7487079ec300ff7751322de5e7d67f0f46749591b78ff1442cbe8",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/r/rtmpdump/librtmp1_2.4+20151223.gitfa8646d.1-3_amd64.deb",
+      "file_bytes": 128962,
+      "entries": 10,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 128962,
+          "link_bytes": 0,
+          "entries": 9
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 4421,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libsasl2-2",
+      "version": "2.1.28+dfsg1-9ubuntu3",
+      "architecture": "amd64",
+      "file": "libsasl2-2_2.1.28+dfsg1-9ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 53984,
+      "sha256": "11b9b2ce6702d86dd3dea60e08bd15255d7fd9545431a9e555eec47770404de0",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/c/cyrus-sasl2/libsasl2-2_2.1.28+dfsg1-9ubuntu3_amd64.deb",
+      "file_bytes": 135153,
+      "entries": 16,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 135153,
+          "link_bytes": 60,
+          "entries": 15
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1606,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libsasl2-modules-db",
+      "version": "2.1.28+dfsg1-9ubuntu3",
+      "architecture": "amd64",
+      "file": "libsasl2-modules-db_2.1.28+dfsg1-9ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 21098,
+      "sha256": "1de7b83844537091315210afb466ff2cd022874db5a6a785ce06b41bd3507eb3",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/c/cyrus-sasl2/libsasl2-modules-db_2.1.28+dfsg1-9ubuntu3_amd64.deb",
+      "file_bytes": 63628,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 63628,
+          "link_bytes": 38,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 898,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libsqlite3-0",
+      "version": "3.46.1-9ubuntu0.4",
+      "architecture": "amd64",
+      "file": "libsqlite3-0_3.46.1-9ubuntu0.4_amd64.deb",
+      "phase": "base",
+      "size": 719600,
+      "sha256": "a48338328c229e945d13f8bac18ca00f35af998321acb3ecd086c2431a9a507e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/s/sqlite3/libsqlite3-0_3.46.1-9ubuntu0.4_amd64.deb",
+      "file_bytes": 1526877,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 1526877,
+          "link_bytes": 19,
+          "entries": 11
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 50529,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libssh2-1t64",
+      "version": "1.11.1-1ubuntu0.26.04.4",
+      "architecture": "amd64",
+      "file": "libssh2-1t64_1.11.1-1ubuntu0.26.04.4_amd64.deb",
+      "phase": "base",
+      "size": 138284,
+      "sha256": "bb3e334dc885d124d38cd4350f1cb4606c03ce58e9f53dc51a84c2c8d11c84e1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libs/libssh2/libssh2-1t64_1.11.1-1ubuntu0.26.04.4_amd64.deb",
+      "file_bytes": 329718,
+      "entries": 13,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 329718,
+          "link_bytes": 16,
+          "entries": 12
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6484,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libsystemd-shared",
+      "version": "259.9-0ubuntu0.1",
+      "architecture": "amd64",
+      "file": "libsystemd-shared_259.9-0ubuntu0.1_amd64.deb",
+      "phase": "base",
+      "size": 2473420,
+      "sha256": "c9b8ee0c0dff4f25a3d27b3d8ac344e7cc31d2f02fd65c75d818562a86aea8ab",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/s/systemd/libsystemd-shared_259.9-0ubuntu0.1_amd64.deb",
+      "file_bytes": 7574022,
+      "entries": 16,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 7574022,
+          "link_bytes": 0,
+          "entries": 15
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2496,
+        "link_bytes": 0,
+        "entries": 3,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libtasn1-6",
+      "version": "4.21.0-2",
+      "architecture": "amd64",
+      "file": "libtasn1-6_4.21.0-2_amd64.deb",
+      "phase": "base",
+      "size": 45272,
+      "sha256": "59c74951324ead0ff77ab945d561feb1b21bc189b793600b8e2b7cf4d39b1ee5",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libt/libtasn1-6/libtasn1-6_4.21.0-2_amd64.deb",
+      "file_bytes": 102997,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 102997,
+          "link_bytes": 17,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3090,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libtext-charwidth-perl",
+      "version": "0.04-11build4",
+      "architecture": "amd64",
+      "file": "libtext-charwidth-perl_0.04-11build4_amd64.deb",
+      "phase": "base",
+      "size": 9530,
+      "sha256": "55089bcbe8f6213d500900769f5161e35fb9e4147cf472b469a37e1d1e96a022",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libt/libtext-charwidth-perl/libtext-charwidth-perl_0.04-11build4_amd64.deb",
+      "file_bytes": 22544,
+      "entries": 21,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 22544,
+          "link_bytes": 0,
+          "entries": 20
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1191,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libtext-wrapi18n-perl",
+      "version": "0.06-10",
+      "architecture": "all",
+      "file": "libtext-wrapi18n-perl_0.06-10_all.deb",
+      "phase": "base",
+      "size": 7694,
+      "sha256": "936619071dd5d81ff672b685af9ad20e1f524be2241cbd80556aedc376844a36",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libt/libtext-wrapi18n-perl/libtext-wrapi18n-perl_0.06-10_all.deb",
+      "file_bytes": 12008,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 12008,
+          "link_bytes": 0,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1155,
+        "link_bytes": 0,
+        "entries": 2,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libtirpc-common",
+      "version": "1.3.7-0.1",
+      "architecture": "all",
+      "file": "libtirpc-common_1.3.7-0.1_all.deb",
+      "phase": "base",
+      "size": 7114,
+      "sha256": "debc1757cd9b13ec7837e6e76bd9aaf8ae0f622de0e45043e4f5c6e255375814",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libt/libtirpc/libtirpc-common_1.3.7-0.1_all.deb",
+      "file_bytes": 15973,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 767,
+          "link_bytes": 0,
+          "entries": 2
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 15206,
+          "link_bytes": 0,
+          "entries": 9
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1055,
+        "link_bytes": 0,
+        "entries": 3,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libtirpc3t64",
+      "version": "1.3.7-0.1",
+      "architecture": "amd64",
+      "file": "libtirpc3t64_1.3.7-0.1_amd64.deb",
+      "phase": "base",
+      "size": 80910,
+      "sha256": "a6c68bbbcbaf2941aee004e581289958c690d17b867be510940a82df2a5572c1",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libt/libtirpc/libtirpc3t64_1.3.7-0.1_amd64.deb",
+      "file_bytes": 197056,
+      "entries": 14,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 197056,
+          "link_bytes": 17,
+          "entries": 13
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 11470,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libunistring5",
+      "version": "1.3-2build1",
+      "architecture": "amd64",
+      "file": "libunistring5_1.3-2build1_amd64.deb",
+      "phase": "base",
+      "size": 610496,
+      "sha256": "88c0163f1acb384abde07641b7e13fcaea36e0a3b88fc57a653779fc429fc46a",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/libu/libunistring/libunistring5_1.3-2build1_amd64.deb",
+      "file_bytes": 2094420,
+      "entries": 11,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 2094420,
+          "link_bytes": 21,
+          "entries": 10
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 24434,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libwrap0",
+      "version": "7.6.q-36build2",
+      "architecture": "amd64",
+      "file": "libwrap0_7.6.q-36build2_amd64.deb",
+      "phase": "base",
+      "size": 48490,
+      "sha256": "a3784ca083c626c3ae41cdd32d4c5898554650dc77d2b54dbb1197a38198adf8",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/t/tcp-wrappers/libwrap0_7.6.q-36build2_amd64.deb",
+      "file_bytes": 77557,
+      "entries": 19,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 77557,
+          "link_bytes": 50,
+          "entries": 18
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3918,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "libxtables12",
+      "version": "1.8.11-2ubuntu3",
+      "architecture": "amd64",
+      "file": "libxtables12_1.8.11-2ubuntu3_amd64.deb",
+      "phase": "base",
+      "size": 36650,
+      "sha256": "e21126e0544e3b795633fb5b06bb7f2b9a493ebc5ab07b007db0f7f68c0a0aed",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/i/iptables/libxtables12_1.8.11-2ubuntu3_amd64.deb",
+      "file_bytes": 88198,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 88198,
+          "link_bytes": 20,
+          "entries": 11
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 5835,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "media-types",
+      "version": "14.0.0build1",
+      "architecture": "all",
+      "file": "media-types_14.0.0build1_all.deb",
+      "phase": "base",
+      "size": 31434,
+      "sha256": "f3412d08032210541d25c4e00fa492ce527af245ac9bec2e543d81a59b4426aa",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/m/media-types/media-types_14.0.0build1_all.deb",
+      "file_bytes": 89361,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 78419,
+          "link_bytes": 0,
+          "entries": 2
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 10942,
+          "link_bytes": 0,
+          "entries": 9
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1195,
+        "link_bytes": 0,
+        "entries": 3,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "netbase",
+      "version": "6.5build1",
+      "architecture": "all",
+      "file": "netbase_6.5build1_all.deb",
+      "phase": "base",
+      "size": 13036,
+      "sha256": "f008e39aada379d64166153d5e37ccc4f18b3e334babb9e32c4da9b4396ee733",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/netbase/netbase_6.5build1_all.deb",
+      "file_bytes": 22711,
+      "entries": 12,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 18981,
+          "link_bytes": 0,
+          "entries": 5
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 3730,
+          "link_bytes": 0,
+          "entries": 6
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1721,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "nfs-common",
+      "version": "1:2.8.5-1ubuntu1",
+      "architecture": "amd64",
+      "file": "nfs-common_1%3a2.8.5-1ubuntu1_amd64.deb",
+      "phase": "base",
+      "size": 244498,
+      "sha256": "cfc4c568047f3d49cb61f084f0659fce2312ad8c680b6a0836b399d5efcc7e39",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nfs-utils/nfs-common_2.8.5-1ubuntu1_amd64.deb",
+      "file_bytes": 792195,
+      "entries": 111,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 6124,
+          "link_bytes": 0,
+          "entries": 8
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 786071,
+          "link_bytes": 156,
+          "entries": 97
+        },
+        {
+          "path": "/var",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 5
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 11563,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "nftables",
+      "version": "1.1.6-1",
+      "architecture": "amd64",
+      "file": "nftables_1.1.6-1_amd64.deb",
+      "phase": "docker",
+      "size": 76202,
+      "sha256": "fcdeae9ed9761550619d062f8ae87a2399c84ab87f4535bcb9ab0d3649aba59a",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/n/nftables/nftables_1.1.6-1_amd64.deb",
+      "file_bytes": 142450,
+      "entries": 50,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 243,
+          "link_bytes": 0,
+          "entries": 2
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 142207,
+          "link_bytes": 43,
+          "entries": 47
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 5354,
+        "link_bytes": 0,
+        "entries": 5,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "open-iscsi",
+      "version": "2.1.11-3ubuntu3.1",
+      "architecture": "amd64",
+      "file": "open-iscsi_2.1.11-3ubuntu3.1_amd64.deb",
+      "phase": "base",
+      "size": 328660,
+      "sha256": "d9292497ccabe0f98e08e3e57da038f651c89f7ee14ace29e6ba829b33c95d95",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/open-iscsi/open-iscsi_2.1.11-3ubuntu3.1_amd64.deb",
+      "file_bytes": 1093924,
+      "entries": 64,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 22453,
+          "link_bytes": 0,
+          "entries": 8
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 1071471,
+          "link_bytes": 52,
+          "entries": 52
+        },
+        {
+          "path": "/var",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 3
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 54070,
+        "link_bytes": 0,
+        "entries": 9,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "openssl",
+      "version": "3.5.5-1ubuntu3.7",
+      "architecture": "amd64",
+      "file": "openssl_3.5.5-1ubuntu3.7_amd64.deb",
+      "phase": "base",
+      "size": 1242886,
+      "sha256": "6965aafe69e0a49ef34d2e26f8e83d09d1c6037b7e9ee37f19b292a3c6851621",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/o/openssl/openssl_3.5.5-1ubuntu3.7_amd64.deb",
+      "file_bytes": 2030832,
+      "entries": 399,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 12509,
+          "link_bytes": 0,
+          "entries": 5
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 2018323,
+          "link_bytes": 3209,
+          "entries": 393
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 19225,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "pinentry-curses",
+      "version": "1.3.2-3ubuntu1",
+      "architecture": "amd64",
+      "file": "pinentry-curses_1.3.2-3ubuntu1_amd64.deb",
+      "phase": "base",
+      "size": 41104,
+      "sha256": "6dd3b4bc962c55593b447e05cf1bb20deba09cf2c9acff43d4c164ea26ce138e",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/pinentry/pinentry-curses_1.3.2-3ubuntu1_amd64.deb",
+      "file_bytes": 87911,
+      "entries": 15,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 87911,
+          "link_bytes": 0,
+          "entries": 14
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 2390,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "python3",
+      "version": "3.14.3-0ubuntu2",
+      "architecture": "amd64",
+      "file": "python3_3.14.3-0ubuntu2_amd64.deb",
+      "phase": "base",
+      "size": 22938,
+      "sha256": "1ff88ad587f9e52e9f333ab00ae0babea93ac5222fc6909039c4190affe1d574",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3-defaults/python3_3.14.3-0ubuntu2_amd64.deb",
+      "file_bytes": 41026,
+      "entries": 35,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 41026,
+          "link_bytes": 192,
+          "entries": 34
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 4054,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "python3-minimal",
+      "version": "3.14.3-0ubuntu2",
+      "architecture": "amd64",
+      "file": "python3-minimal_3.14.3-0ubuntu2_amd64.deb",
+      "phase": "base",
+      "size": 25808,
+      "sha256": "d5f37616b30209d8c10c4a705d7bf9558ca21e058fc2b2bd2ffcf37a74a42861",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3-defaults/python3-minimal_3.14.3-0ubuntu2_amd64.deb",
+      "file_bytes": 89989,
+      "entries": 28,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 89989,
+          "link_bytes": 56,
+          "entries": 27
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1979,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "python3.14",
+      "version": "3.14.4-1ubuntu0.2",
+      "architecture": "amd64",
+      "file": "python3.14_3.14.4-1ubuntu0.2_amd64.deb",
+      "phase": "base",
+      "size": 830272,
+      "sha256": "780c308c47d8afcbb7d339f0023350e7cf60c1a37e9572a1f88774cc18f60526",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14_3.14.4-1ubuntu0.2_amd64.deb",
+      "file_bytes": 895162,
+      "entries": 34,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 895162,
+          "link_bytes": 48,
+          "entries": 33
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 3122,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "python3.14-minimal",
+      "version": "3.14.4-1ubuntu0.2",
+      "architecture": "amd64",
+      "file": "python3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb",
+      "phase": "base",
+      "size": 2579044,
+      "sha256": "0a7ea8a52834f9b3de0f11758924f80f7a6ebcbb4b02a55ba4f457503569f55f",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/p/python3.14/python3.14-minimal_3.14.4-1ubuntu0.2_amd64.deb",
+      "file_bytes": 7537628,
+      "entries": 21,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 7537628,
+          "link_bytes": 44,
+          "entries": 20
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6041,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "readline-common",
+      "version": "8.3-4",
+      "architecture": "all",
+      "file": "readline-common_8.3-4_all.deb",
+      "phase": "base",
+      "size": 61514,
+      "sha256": "53cdc5a963bbdda938f8996496a5e78bcf484e6e41a2ef2c0f8cf566808f71f5",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/r/readline/readline-common_8.3-4_all.deb",
+      "file_bytes": 63894,
+      "entries": 20,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 1
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 63894,
+          "link_bytes": 0,
+          "entries": 18
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 1675,
+        "link_bytes": 0,
+        "entries": 4,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "rpcbind",
+      "version": "1.2.7-1build2",
+      "architecture": "amd64",
+      "file": "rpcbind_1.2.7-1build2_amd64.deb",
+      "phase": "base",
+      "size": 47582,
+      "sha256": "cdf3b1779d51f85c7e3694ffca07338e840cb2605482ad04d822b3ee5bf684dc",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/r/rpcbind/rpcbind_1.2.7-1build2_amd64.deb",
+      "file_bytes": 117301,
+      "entries": 33,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 2902,
+          "link_bytes": 0,
+          "entries": 7
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 114399,
+          "link_bytes": 29,
+          "entries": 25
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 6478,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "systemd",
+      "version": "259.9-0ubuntu0.1",
+      "architecture": "amd64",
+      "file": "systemd_259.9-0ubuntu0.1_amd64.deb",
+      "phase": "base",
+      "size": 3137006,
+      "sha256": "f4189a9737929afa8c7e9fcb3cc86ec4d93982477d272c55e67fb4e34a0a13b8",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/s/systemd/systemd_259.9-0ubuntu0.1_amd64.deb",
+      "file_bytes": 8767850,
+      "entries": 1020,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 10845,
+          "link_bytes": 196,
+          "entries": 34
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 8757005,
+          "link_bytes": 5226,
+          "entries": 982
+        },
+        {
+          "path": "/var",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 3
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 67304,
+        "link_bytes": 0,
+        "entries": 8,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "tzdata",
+      "version": "2026f-0ubuntu0.26.04.1",
+      "architecture": "all",
+      "file": "tzdata_2026f-0ubuntu0.26.04.1_all.deb",
+      "phase": "base",
+      "size": 193408,
+      "sha256": "4310a039863c3dbc4924c4c9521abe7810f8b73b41c166ff421fa09b4c123afa",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/t/tzdata/tzdata_2026f-0ubuntu0.26.04.1_all.deb",
+      "file_bytes": 637839,
+      "entries": 522,
+      "data_paths": [
+        {
+          "path": "/usr",
+          "file_bytes": 637839,
+          "link_bytes": 393,
+          "entries": 521
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 319586,
+        "link_bytes": 0,
+        "entries": 6,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "ucf",
+      "version": "3.0052ubuntu1",
+      "architecture": "all",
+      "file": "ucf_3.0052ubuntu1_all.deb",
+      "phase": "base",
+      "size": 44280,
+      "sha256": "42354d322fda598511b62288123e8b4b6daf6b7bbb268d68e8e7f88efa498305",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/u/ucf/ucf_3.0052ubuntu1_all.deb",
+      "file_bytes": 89315,
+      "entries": 33,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 1259,
+          "link_bytes": 0,
+          "entries": 2
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 88056,
+          "link_bytes": 0,
+          "entries": 27
+        },
+        {
+          "path": "/var",
+          "file_bytes": 0,
+          "link_bytes": 0,
+          "entries": 3
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 35021,
+        "link_bytes": 0,
+        "entries": 7,
+        "root_entries": 1
+      }
+    },
+    {
+      "name": "udev",
+      "version": "259.9-0ubuntu0.1",
+      "architecture": "amd64",
+      "file": "udev_259.9-0ubuntu0.1_amd64.deb",
+      "phase": "base",
+      "size": 1525236,
+      "sha256": "8b7e29109bf3d0e32199b1f2111535740c9cb81e9d4273ec6f05682459cfc3f4",
+      "url": "https://archive.ubuntu.com/ubuntu/pool/main/s/systemd/udev_259.9-0ubuntu0.1_amd64.deb",
+      "file_bytes": 10718572,
+      "entries": 180,
+      "data_paths": [
+        {
+          "path": "/etc",
+          "file_bytes": 1170,
+          "link_bytes": 0,
+          "entries": 6
+        },
+        {
+          "path": "/usr",
+          "file_bytes": 10717402,
+          "link_bytes": 387,
+          "entries": 173
+        }
+      ],
+      "data_root_entries": 1,
+      "control": {
+        "file_bytes": 14745,
+        "link_bytes": 0,
+        "entries": 8,
+        "root_entries": 1
+      }
+    }
+  ],
+  "platform": "linux-amd64",
+  "suite": "resolute",
+  "version": 1,
+  "data_directories": [
+    "/etc",
+    "/etc/X11",
+    "/etc/X11/Xsession.d",
+    "/etc/binfmt.d",
+    "/etc/ca-certificates",
+    "/etc/ca-certificates/update.d",
+    "/etc/containerd",
+    "/etc/credstore",
+    "/etc/credstore.encrypted",
+    "/etc/default",
+    "/etc/docker",
+    "/etc/gnutls",
+    "/etc/gss",
+    "/etc/gss/mech.d",
+    "/etc/init.d",
+    "/etc/insserv.conf.d",
+    "/etc/iscsi",
+    "/etc/kernel",
+    "/etc/kernel/install.d",
+    "/etc/keyutils",
+    "/etc/ldap",
+    "/etc/logcheck",
+    "/etc/logcheck/ignore.d.server",
+    "/etc/modules-load.d",
+    "/etc/nfs.conf.d",
+    "/etc/profile.d",
+    "/etc/python3.14",
+    "/etc/request-key.d",
+    "/etc/security",
+    "/etc/security/limits.d",
+    "/etc/ssh",
+    "/etc/ssh/ssh_config.d",
+    "/etc/ssl",
+    "/etc/ssl/certs",
+    "/etc/ssl/private",
+    "/etc/systemd",
+    "/etc/systemd/network",
+    "/etc/systemd/system",
+    "/etc/systemd/system-generators",
+    "/etc/systemd/user",
+    "/etc/tmpfiles.d",
+    "/etc/udev",
+    "/etc/udev/hwdb.d",
+    "/etc/udev/rules.d",
+    "/etc/xdg",
+    "/etc/xdg/systemd",
+    "/usr",
+    "/usr/bin",
+    "/usr/lib",
+    "/usr/lib/binfmt.d",
+    "/usr/lib/environment.d",
+    "/usr/lib/gnupg",
+    "/usr/lib/gnupg2",
+    "/usr/lib/kernel",
+    "/usr/lib/kernel/install.d",
+    "/usr/lib/lsb",
+    "/usr/lib/lsb/init-functions.d",
+    "/usr/lib/modprobe.d",
+    "/usr/lib/nvpcr",
+    "/usr/lib/open-iscsi",
+    "/usr/lib/pam.d",
+    "/usr/lib/pcrlock.d",
+    "/usr/lib/pcrlock.d/400-secureboot-separator.pcrlock.d",
+    "/usr/lib/pcrlock.d/500-separator.pcrlock.d",
+    "/usr/lib/pcrlock.d/700-action-efi-exit-boot-services.pcrlock.d",
+    "/usr/lib/python3",
+    "/usr/lib/python3.14",
+    "/usr/lib/python3.14/__phello__",
+    "/usr/lib/python3.14/_pyrepl",
+    "/usr/lib/python3.14/asyncio",
+    "/usr/lib/python3.14/collections",
+    "/usr/lib/python3.14/compression",
+    "/usr/lib/python3.14/compression/_common",
+    "/usr/lib/python3.14/compression/zstd",
+    "/usr/lib/python3.14/concurrent",
+    "/usr/lib/python3.14/concurrent/futures",
+    "/usr/lib/python3.14/concurrent/interpreters",
+    "/usr/lib/python3.14/ctypes",
+    "/usr/lib/python3.14/curses",
+    "/usr/lib/python3.14/dbm",
+    "/usr/lib/python3.14/email",
+    "/usr/lib/python3.14/email/mime",
+    "/usr/lib/python3.14/encodings",
+    "/usr/lib/python3.14/html",
+    "/usr/lib/python3.14/http",
+    "/usr/lib/python3.14/importlib",
+    "/usr/lib/python3.14/importlib/metadata",
+    "/usr/lib/python3.14/importlib/resources",
+    "/usr/lib/python3.14/json",
+    "/usr/lib/python3.14/lib-dynload",
+    "/usr/lib/python3.14/logging",
+    "/usr/lib/python3.14/multiprocessing",
+    "/usr/lib/python3.14/multiprocessing/dummy",
+    "/usr/lib/python3.14/pathlib",
+    "/usr/lib/python3.14/pydoc_data",
+    "/usr/lib/python3.14/re",
+    "/usr/lib/python3.14/sqlite3",
+    "/usr/lib/python3.14/string",
+    "/usr/lib/python3.14/sysconfig",
+    "/usr/lib/python3.14/test",
+    "/usr/lib/python3.14/test/libregrtest",
+    "/usr/lib/python3.14/test/support",
+    "/usr/lib/python3.14/test/support/_hypothesis_stubs",
+    "/usr/lib/python3.14/test/typinganndata",
+    "/usr/lib/python3.14/test/typinganndata/partialexecution",
+    "/usr/lib/python3.14/tomllib",
+    "/usr/lib/python3.14/unittest",
+    "/usr/lib/python3.14/urllib",
+    "/usr/lib/python3.14/venv",
+    "/usr/lib/python3.14/venv/scripts",
+    "/usr/lib/python3.14/venv/scripts/common",
+    "/usr/lib/python3.14/venv/scripts/posix",
+    "/usr/lib/python3.14/wsgiref",
+    "/usr/lib/python3.14/xml",
+    "/usr/lib/python3.14/xml/dom",
+    "/usr/lib/python3.14/xml/etree",
+    "/usr/lib/python3.14/xml/parsers",
+    "/usr/lib/python3.14/xml/sax",
+    "/usr/lib/python3.14/xmlrpc",
+    "/usr/lib/python3.14/zipfile",
+    "/usr/lib/python3.14/zipfile/_path",
+    "/usr/lib/python3.14/zoneinfo",
+    "/usr/lib/python3/dist-packages",
+    "/usr/lib/sasl2",
+    "/usr/lib/ssl",
+    "/usr/lib/ssl/misc",
+    "/usr/lib/sysctl.d",
+    "/usr/lib/systemd",
+    "/usr/lib/systemd/catalog",
+    "/usr/lib/systemd/initrd-preset",
+    "/usr/lib/systemd/journald.conf.d",
+    "/usr/lib/systemd/network",
+    "/usr/lib/systemd/profile.d",
+    "/usr/lib/systemd/ssh_config.d",
+    "/usr/lib/systemd/system",
+    "/usr/lib/systemd/system-generators",
+    "/usr/lib/systemd/system-preset",
+    "/usr/lib/systemd/system.conf.d",
+    "/usr/lib/systemd/system/factory-reset.target.wants",
+    "/usr/lib/systemd/system/getty.target.wants",
+    "/usr/lib/systemd/system/initrd.target.wants",
+    "/usr/lib/systemd/system/local-fs.target.wants",
+    "/usr/lib/systemd/system/multi-user.target.wants",
+    "/usr/lib/systemd/system/rc-local.service.d",
+    "/usr/lib/systemd/system/sockets.target.wants",
+    "/usr/lib/systemd/system/storage-target-mode.target.wants",
+    "/usr/lib/systemd/system/sysinit.target.wants",
+    "/usr/lib/systemd/system/systemd-fsck-root.service.d",
+    "/usr/lib/systemd/system/systemd-journald.service.d",
+    "/usr/lib/systemd/system/systemd-localed.service.d",
+    "/usr/lib/systemd/system/systemd-logind.service.d",
+    "/usr/lib/systemd/system/systemd-udevd.service.d",
+    "/usr/lib/systemd/system/timers.target.wants",
+    "/usr/lib/systemd/system/user-.slice.d",
+    "/usr/lib/systemd/system/user@.service.d",
+    "/usr/lib/systemd/system/user@0.service.d",
+    "/usr/lib/systemd/user",
+    "/usr/lib/systemd/user-environment-generators",
+    "/usr/lib/systemd/user-generators",
+    "/usr/lib/systemd/user-preset",
+    "/usr/lib/systemd/user.conf.d",
+    "/usr/lib/systemd/user/sockets.target.wants",
+    "/usr/lib/sysusers.d",
+    "/usr/lib/tmpfiles.d",
+    "/usr/lib/udev",
+    "/usr/lib/udev/hwdb.d",
+    "/usr/lib/udev/rules.d",
+    "/usr/lib/valgrind",
+    "/usr/lib/x86_64-linux-gnu",
+    "/usr/lib/x86_64-linux-gnu/krb5",
+    "/usr/lib/x86_64-linux-gnu/krb5/plugins",
+    "/usr/lib/x86_64-linux-gnu/krb5/plugins/libkrb5",
+    "/usr/lib/x86_64-linux-gnu/krb5/plugins/preauth",
+    "/usr/lib/x86_64-linux-gnu/libnfsidmap",
+    "/usr/lib/x86_64-linux-gnu/perl5",
+    "/usr/lib/x86_64-linux-gnu/perl5/5.40",
+    "/usr/lib/x86_64-linux-gnu/perl5/5.40/Text",
+    "/usr/lib/x86_64-linux-gnu/perl5/5.40/auto",
+    "/usr/lib/x86_64-linux-gnu/perl5/5.40/auto/Text",
+    "/usr/lib/x86_64-linux-gnu/perl5/5.40/auto/Text/CharWidth",
+    "/usr/lib/x86_64-linux-gnu/sasl2",
+    "/usr/lib/x86_64-linux-gnu/systemd",
+    "/usr/lib/x86_64-linux-gnu/xtables",
+    "/usr/libexec",
+    "/usr/libexec/docker",
+    "/usr/libexec/docker/cli-plugins",
+    "/usr/sbin",
+    "/usr/share",
+    "/usr/share/applications",
+    "/usr/share/apport",
+    "/usr/share/apport/package-hooks",
+    "/usr/share/bash-completion",
+    "/usr/share/bash-completion/completions",
+    "/usr/share/binfmts",
+    "/usr/share/bug",
+    "/usr/share/bug/media-types",
+    "/usr/share/bug/nfs-common",
+    "/usr/share/bug/nfs-utils",
+    "/usr/share/bug/systemd",
+    "/usr/share/bug/udev",
+    "/usr/share/ca-certificates",
+    "/usr/share/ca-certificates/mozilla",
+    "/usr/share/dbus-1",
+    "/usr/share/dbus-1/services",
+    "/usr/share/dbus-1/system-services",
+    "/usr/share/dbus-1/system.d",
+    "/usr/share/doc",
+    "/usr/share/doc-base",
+    "/usr/share/doc/adduser",
+    "/usr/share/doc/adduser/examples",
+    "/usr/share/doc/adduser/examples/adduser.local.conf.examples",
+    "/usr/share/doc/adduser/examples/adduser.local.conf.examples/skel",
+    "/usr/share/doc/adduser/examples/adduser.local.conf.examples/skel.other",
+    "/usr/share/doc/ca-certificates",
+    "/usr/share/doc/ca-certificates/examples",
+    "/usr/share/doc/ca-certificates/examples/ca-certificates-local",
+    "/usr/share/doc/ca-certificates/examples/ca-certificates-local/debian",
+    "/usr/share/doc/ca-certificates/examples/ca-certificates-local/debian/source",
+    "/usr/share/doc/ca-certificates/examples/ca-certificates-local/local",
+    "/usr/share/doc/containerd.io",
+    "/usr/share/doc/curl",
+    "/usr/share/doc/dirmngr",
+    "/usr/share/doc/docker-buildx-plugin",
+    "/usr/share/doc/docker-ce",
+    "/usr/share/doc/docker-ce-cli",
+    "/usr/share/doc/gnupg",
+    "/usr/share/doc/gnupg/examples",
+    "/usr/share/doc/gnupg/examples/systemd-user",
+    "/usr/share/doc/gpg",
+    "/usr/share/doc/gpg-agent",
+    "/usr/share/doc/gpg-agent/examples",
+    "/usr/share/doc/gpgconf",
+    "/usr/share/doc/gpgconf/examples",
+    "/usr/share/doc/gpgsm",
+    "/usr/share/doc/iptables",
+    "/usr/share/doc/keyutils",
+    "/usr/share/doc/libassuan9",
+    "/usr/share/doc/libbrotli1",
+    "/usr/share/doc/libcap2",
+    "/usr/share/doc/libcurl4t64",
+    "/usr/share/doc/libedit2",
+    "/usr/share/doc/libevent-core-2.1-7t64",
+    "/usr/share/doc/libexpat1",
+    "/usr/share/doc/libffi8",
+    "/usr/share/doc/libgnutls30t64",
+    "/usr/share/doc/libgssapi-krb5-2",
+    "/usr/share/doc/libhogweed6t64",
+    "/usr/share/doc/libidn2-0",
+    "/usr/share/doc/libip4tc2",
+    "/usr/share/doc/libip6tc2",
+    "/usr/share/doc/libisns0t64",
+    "/usr/share/doc/libjansson4",
+    "/usr/share/doc/libjansson4/examples",
+    "/usr/share/doc/libk5crypto3",
+    "/usr/share/doc/libkeyutils1",
+    "/usr/share/doc/libkmod2",
+    "/usr/share/doc/libkrb5-3",
+    "/usr/share/doc/libkrb5support0",
+    "/usr/share/doc/libksba8",
+    "/usr/share/doc/libldap-common",
+    "/usr/share/doc/libldap2",
+    "/usr/share/doc/libmnl0",
+    "/usr/share/doc/libnetfilter-conntrack3",
+    "/usr/share/doc/libnettle8t64",
+    "/usr/share/doc/libnfnetlink0",
+    "/usr/share/doc/libnfsidmap1",
+    "/usr/share/doc/libnftables1",
+    "/usr/share/doc/libnftnl11",
+    "/usr/share/doc/libnghttp2-14",
+    "/usr/share/doc/libnpth0t64",
+    "/usr/share/doc/libopeniscsiusr",
+    "/usr/share/doc/libp11-kit0",
+    "/usr/share/doc/libp11-kit0/examples",
+    "/usr/share/doc/libpsl5t64",
+    "/usr/share/doc/libpython3-stdlib",
+    "/usr/share/doc/libpython3.14-minimal",
+    "/usr/share/doc/libreadline8t64",
+    "/usr/share/doc/libreadline8t64/examples",
+    "/usr/share/doc/librtmp1",
+    "/usr/share/doc/libsasl2-2",
+    "/usr/share/doc/libsasl2-modules-db",
+    "/usr/share/doc/libsqlite3-0",
+    "/usr/share/doc/libssh2-1t64",
+    "/usr/share/doc/libsystemd-shared",
+    "/usr/share/doc/libtasn1-6",
+    "/usr/share/doc/libtext-charwidth-perl",
+    "/usr/share/doc/libtext-wrapi18n-perl",
+    "/usr/share/doc/libtirpc-common",
+    "/usr/share/doc/libtirpc3t64",
+    "/usr/share/doc/libunistring5",
+    "/usr/share/doc/libwrap0",
+    "/usr/share/doc/libxtables12",
+    "/usr/share/doc/media-types",
+    "/usr/share/doc/netbase",
+    "/usr/share/doc/nfs-common",
+    "/usr/share/doc/nftables",
+    "/usr/share/doc/nftables/examples",
+    "/usr/share/doc/nftables/examples/sysvinit",
+    "/usr/share/doc/open-iscsi",
+    "/usr/share/doc/openssl",
+    "/usr/share/doc/openssl/HOWTO",
+    "/usr/share/doc/pinentry-curses",
+    "/usr/share/doc/python3",
+    "/usr/share/doc/python3-minimal",
+    "/usr/share/doc/python3.14",
+    "/usr/share/doc/python3.14-minimal",
+    "/usr/share/doc/readline-common",
+    "/usr/share/doc/rpcbind",
+    "/usr/share/doc/systemd",
+    "/usr/share/doc/tzdata",
+    "/usr/share/doc/ucf",
+    "/usr/share/doc/ucf/examples",
+    "/usr/share/doc/udev",
+    "/usr/share/factory",
+    "/usr/share/factory/etc",
+    "/usr/share/factory/etc/pam.d",
+    "/usr/share/finalrd",
+    "/usr/share/fish",
+    "/usr/share/fish/vendor_completions.d",
+    "/usr/share/gnupg",
+    "/usr/share/info",
+    "/usr/share/initramfs-tools",
+    "/usr/share/initramfs-tools/hooks",
+    "/usr/share/initramfs-tools/scripts",
+    "/usr/share/initramfs-tools/scripts/init-bottom",
+    "/usr/share/initramfs-tools/scripts/init-top",
+    "/usr/share/initramfs-tools/scripts/local-bottom",
+    "/usr/share/initramfs-tools/scripts/local-top",
+    "/usr/share/iptables",
+    "/usr/share/keyutils",
+    "/usr/share/lintian",
+    "/usr/share/lintian/overrides",
+    "/usr/share/man",
+    "/usr/share/man/da",
+    "/usr/share/man/da/man5",
+    "/usr/share/man/de",
+    "/usr/share/man/de/man5",
+    "/usr/share/man/de/man8",
+    "/usr/share/man/es",
+    "/usr/share/man/es/man5",
+    "/usr/share/man/fr",
+    "/usr/share/man/fr/man5",
+    "/usr/share/man/fr/man8",
+    "/usr/share/man/it",
+    "/usr/share/man/it/man5",
+    "/usr/share/man/man1",
+    "/usr/share/man/man3",
+    "/usr/share/man/man5",
+    "/usr/share/man/man7",
+    "/usr/share/man/man8",
+    "/usr/share/man/nl",
+    "/usr/share/man/nl/man5",
+    "/usr/share/man/nl/man8",
+    "/usr/share/man/pl",
+    "/usr/share/man/pl/man5",
+    "/usr/share/man/pt",
+    "/usr/share/man/pt/man5",
+    "/usr/share/man/pt/man8",
+    "/usr/share/man/ro",
+    "/usr/share/man/ro/man5",
+    "/usr/share/man/ro/man8",
+    "/usr/share/man/ru",
+    "/usr/share/man/ru/man5",
+    "/usr/share/man/sv",
+    "/usr/share/man/sv/man5",
+    "/usr/share/mime",
+    "/usr/share/mime/packages",
+    "/usr/share/nfs-common",
+    "/usr/share/nfs-common/conffiles",
+    "/usr/share/perl5",
+    "/usr/share/perl5/Debian",
+    "/usr/share/perl5/Text",
+    "/usr/share/pixmaps",
+    "/usr/share/polkit-1",
+    "/usr/share/polkit-1/actions",
+    "/usr/share/polkit-1/rules.d",
+    "/usr/share/python3",
+    "/usr/share/python3/debpython",
+    "/usr/share/python3/runtime.d",
+    "/usr/share/readline",
+    "/usr/share/systemd",
+    "/usr/share/ucf",
+    "/usr/share/zoneinfo",
+    "/usr/share/zoneinfo/Africa",
+    "/usr/share/zoneinfo/America",
+    "/usr/share/zoneinfo/America/Argentina",
+    "/usr/share/zoneinfo/America/Indiana",
+    "/usr/share/zoneinfo/America/Kentucky",
+    "/usr/share/zoneinfo/America/North_Dakota",
+    "/usr/share/zoneinfo/Antarctica",
+    "/usr/share/zoneinfo/Arctic",
+    "/usr/share/zoneinfo/Asia",
+    "/usr/share/zoneinfo/Atlantic",
+    "/usr/share/zoneinfo/Australia",
+    "/usr/share/zoneinfo/Etc",
+    "/usr/share/zoneinfo/Europe",
+    "/usr/share/zoneinfo/Indian",
+    "/usr/share/zoneinfo/Pacific",
+    "/usr/share/zsh",
+    "/usr/share/zsh/vendor-completions",
+    "/var",
+    "/var/cache",
+    "/var/cache/adduser",
+    "/var/lib",
+    "/var/lib/iscsi",
+    "/var/lib/nfs",
+    "/var/lib/nfs/sm",
+    "/var/lib/nfs/sm.bak",
+    "/var/lib/systemd",
+    "/var/lib/ucf"
+  ]
+}

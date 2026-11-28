@@ -55,7 +55,7 @@ func TestClusterSSHPreparationApprovalPostgresLifecycle(t *testing.T) {
 	t.Run("confirmed pair ownership recovery and cancellation", func(t *testing.T) {
 		f, snap, _, proof := newSSHPreparationApprovalFixture(t, false)
 		plan := &clusterSSHPairInstallation{Inspection: snap.work.Authorization.InspectionSHA256, Configuration: proof.receipts[4], Targets: proof.targetCPU, Packages: proof.packages, Demand: proof.capacity.Targets, SystemDiskBytes: []uint64{clusterSSHSystemDiskMinimum, clusterSSHSystemDiskMinimum}, PostgresImage: clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("a", 64), Manifests: map[string]string{}}
-		for n := range pairManifestLimits() {
+		for n := range pairManifestLimits("noble") {
 			plan.Manifests[n] = "sha256:" + strings.Repeat("a", 64)
 		}
 		report := clusterSSHQualificationReport{Installation: plan, Version: 2, Attempt: f.op.Attempt, ObservedAt: time.Now().Unix(), Ready: true}

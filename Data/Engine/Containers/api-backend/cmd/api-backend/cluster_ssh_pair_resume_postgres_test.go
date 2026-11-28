@@ -24,7 +24,7 @@ func TestStoppedPairFreshAccessPostgres(t *testing.T) {
 	}
 	cpu := sshPreparationTargetCPUFixture(clusterSSHPreparationApprovalSnapshot{work: clusterSSHPreparationWork{Proof: proof}})
 	install := &clusterSSHPairInstallation{Inspection: a.InspectionSHA256, Configuration: strings.Repeat("c", 64), PostgresImage: clusterbootstrap.PostgresImageRepository + "@sha256:" + strings.Repeat("a", 64), Targets: cpu, Packages: sshPreparationTargetPackagesFixture(cpu), Manifests: map[string]string{}}
-	for name := range pairManifestLimits() {
+	for name := range pairManifestLimits("noble") {
 		install.Manifests[name] = "sha256:" + strings.Repeat("a", 64)
 	}
 	report := newClusterSSHQualificationReport(f.op.Attempt)

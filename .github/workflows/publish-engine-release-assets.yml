@@ -245,7 +245,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release }}
         run: |
-          gh release upload "$RELEASE_TAG" \
-            "$RUNNER_TEMP/borealis-node-host-packages/borealis-node-host-packages-ubuntu-noble-linux-amd64.tar" \
-            "$RUNNER_TEMP/borealis-node-host-packages/borealis-node-host-packages-ubuntu-noble-linux-amd64.json" \
-            --repo "$GITHUB_REPOSITORY"
+          assets=("$RUNNER_TEMP/borealis-node-host-packages"/borealis-node-host-packages-ubuntu-noble-linux-amd64.{tar,json})
+          if [[ -f Data/Engine/Containers/api-backend/internal/clusterbootstrap/host_packages.resolute.lock.json ]]; then
+            assets+=("$RUNNER_TEMP/borealis-node-host-packages"/borealis-node-host-packages-ubuntu-resolute-linux-amd64.{tar,json})
+          fi
+          gh release upload "$RELEASE_TAG" "${assets[@]}" --repo "$GITHUB_REPOSITORY"

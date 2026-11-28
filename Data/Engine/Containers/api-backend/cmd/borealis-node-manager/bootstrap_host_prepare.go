@@ -83,20 +83,23 @@ func bootstrapNativeHostActionsFor(expected clusterbootstrap.PreparationExpected
 			}
 			command := func(ctx context.Context, step bootstrapHostCommand, host, identityFile *os.File) error {
 				if step == bootstrapHostInstallBase || step == bootstrapHostInstallDocker {
-					return prepareBootstrapHostPackages(ctx, packageDirectory, step, false, host, identityFile, guard, identity, boundary, approvedInventory(step))
+					return prepareBootstrapHostPackages(ctx, packageDirectory, step, false, clean.suite, host, identityFile, guard, identity, boundary, approvedInventory(step))
 				}
 				return runBootstrapHostCommand(ctx, step, host, identityFile, guard, identity, boundary)
 			}
 			return prepareBootstrapNativeHostPhaseWith(ctx, expected, hostLock, identityLock, boundary, repositoryContinuation, bootstrapNativeHostOperations{
 				preflight: func(ctx context.Context) error {
 					clean, err = observeBootstrapEarlyHost(ctx, root, expected, check, readBootstrapDockerProbe, observeBootstrapAbsentUnit, repositoryContinuation)
-					pins, _, pinsErr := clusterbootstrap.HostPackagePins()
+					if expected.TargetPackages == nil {
+						return errBootstrapSource
+					}
+					pins, _, pinsErr := expected.TargetPackages.Plan()
 					if err != nil || pinsErr != nil || clean.suite != pins.Suite {
 						return errBootstrapSource
 					}
 					// The combined solver proves both fixed phases before the first
 					// effect. It runs under durable intent and both inherited fences.
-					return prepareBootstrapHostPackages(ctx, packageDirectory, 0, true, hostLock, identityLock, guard, identity, boundary, approvedInventory(0))
+					return prepareBootstrapHostPackages(ctx, packageDirectory, 0, true, clean.suite, hostLock, identityLock, guard, identity, boundary, approvedInventory(0))
 				},
 				base: func(ctx context.Context) error {
 					after, err := observeBootstrapDockerHost(ctx, root, nil, check, readBootstrapDockerProbe)

@@ -203,7 +203,7 @@ func TestClusterSSHHostPackagePublication(t *testing.T) {
 			})
 			http.DefaultClient = &client
 			t.Cleanup(func() { http.DefaultClient = previous })
-			value, err := resolveClusterSSHHostPackageInventory(ctx, f.expected)
+			value, err := resolveClusterSSHHostPackageInventory(ctx, f.expected, "noble")
 			valid := mode == "valid" || mode == "publication changed"
 			if (err == nil) != valid {
 				t.Fatal("wrong immutable package decision", err)

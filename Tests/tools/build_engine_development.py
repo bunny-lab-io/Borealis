@@ -29,6 +29,9 @@ def binding(record):
     for family, pkg in PACKAGERS.items():
         name = bootstrap.MANIFEST_NAME if family == "bootstrap" else pkg.INVENTORY
         inventories[family] = record["artifacts"][family + "/" + name]["sha256"]
+    resolute = "host_package/" + packages.RESOLUTE_INVENTORY
+    if resolute in record["artifacts"]:
+        inventories["host_package_resolute"] = record["artifacts"][resolute]["sha256"]
     return canonical(dict(schema=2, channel="development", repository=record["repository"],
                           source_sha=record["source_sha"], source_tree=record["source_tree"],
                           platform=record["platform"], inventories=inventories,
@@ -57,7 +60,10 @@ def artifact_names(family, source):
     if family == "image":
         return {images.INVENTORY, *(f"borealis-node-image-{r}-linux-amd64.oci.tar" for r in images.ROLES)}
     if family == "host_package":
-        return {packages.ARCHIVE, packages.INVENTORY}
+        names = {packages.ARCHIVE, packages.INVENTORY}
+        if source is not None and (source / packages.RESOLUTE_LOCK).is_file():
+            names.update((packages.RESOLUTE_ARCHIVE, packages.RESOLUTE_INVENTORY))
+        return names
     if family == "k3s":
         return {k3s.ARCHIVE, k3s.BINARY, k3s.INSTALLER, k3s.INVENTORY}
     pins = json.loads((source / external.pins.LOCK).read_bytes())
@@ -80,6 +86,8 @@ def build(source, revision, output, families, repository, go_bin, archives=None,
             directory = result / family
             kwargs = dict(archives=archives) if family == "host_package" else dict(go_bin=go_bin)
             inventory = base.dependency_family(family, snapshot, sha, label, directory) if base else None
+            if inventory is not None and family == "host_package" and (snapshot / packages.RESOLUTE_LOCK).is_file():
+                packages.build_suite(snapshot, "resolute", label, sha, repository, directory, archives, work)
             if inventory is None:
                 if family == "image" and base:
                     kwargs["reuse"] = base
@@ -176,6 +184,16 @@ def verify(directory):
                 raise ValueError("empty external inventory")
         else:
             expected = artifact_names(family, None)
+            if family == "host_package" and "host_package/" + packages.RESOLUTE_INVENTORY in record["artifacts"]:
+                expected.update((packages.RESOLUTE_ARCHIVE, packages.RESOLUTE_INVENTORY))
+                path = directory / family / packages.RESOLUTE_INVENTORY
+                if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 2 << 20:
+                    raise ValueError("invalid Resolute inventory")
+                other = json.loads(path.read_bytes(), object_pairs_hook=packages.unique_object)
+                if (any(other.get(k) != inv[k] for k in ("repository", "release", "source_sha", "platform"))
+                        or other["suite"] != "resolute" or other["os_version"] != "26.04"
+                        or other["archive"]["name"] != packages.RESOLUTE_ARCHIVE):
+                    raise ValueError("unmatched Resolute package inventory")
         if {p.name for p in (directory / family).iterdir()} != expected:
             raise ValueError("incomplete development family")
     entries = {p.relative_to(directory).as_posix(): p for p in directory.glob("*/*")}

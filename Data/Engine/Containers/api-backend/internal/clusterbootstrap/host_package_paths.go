@@ -131,7 +131,11 @@ func (s HostPackageSelection) DpkgMetadataDemand() (PreparationScratchDemand, er
 	// directory inventory includes the longer, normalized usrmerge spelling.
 	// Add the separator, one ext4/XFS filename component and the final newline.
 	longestDirectory := 0
-	for _, directory := range compiledHostPackagePlan.plan.DataDirectories {
+	plan, _, err := s.Plan()
+	if err != nil {
+		return PreparationScratchDemand{}, err
+	}
+	for _, directory := range plan.DataDirectories {
 		longestDirectory = max(longestDirectory, len(directory))
 	}
 	lineBytes := uint64(longestDirectory + 1 + hostPackageMaxComponentBytes + 1)

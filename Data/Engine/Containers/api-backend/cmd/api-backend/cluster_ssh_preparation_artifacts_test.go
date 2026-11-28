@@ -69,7 +69,7 @@ func TestClusterSSHPreparationArtifactsStageFailure(t *testing.T) {
 	if got := failure.Error(); got != "Source staging failed during application image archives. Start a fresh inspection." || !errors.Is(failure, cause) {
 		t.Fatal("stage error must identify the public phase and preserve its private cause")
 	}
-	_, err := acquireClusterSSHPreparationArtifacts(context.Background(), t.TempDir(), clusterbootstrap.Expected{}, "", "", nil)
+	_, err := acquireClusterSSHPreparationArtifacts(context.Background(), t.TempDir(), clusterbootstrap.Expected{}, "", "", "noble", nil)
 	if !errors.As(err, &failure) || failure.phase != "release authority check" || !errors.Is(err, clusterbootstrap.ErrPreparationConfig) {
 		t.Fatal("acquisition failed without identifying the initial authority check")
 	}
@@ -408,7 +408,7 @@ func TestClusterSSHPreparationArtifactsAcquiredPublication(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			packages, err := resolveClusterSSHHostPackageInventory(ctx, f.expected)
+			packages, err := resolveClusterSSHHostPackageInventory(ctx, f.expected, "noble")
 			if err != nil {
 				t.Fatal(err)
 			}
