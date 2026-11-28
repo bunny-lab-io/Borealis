@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -9,6 +10,29 @@ import (
 
 	"borealis/api-backend/internal/clusterbootstrap"
 )
+
+func TestPairTargetCapacityReportsMeasuredBounds(t *testing.T) {
+	const availableKiB = (clusterSSHHostMemoryReserveBytes + 1023) / 1024
+	cpu, err := pairTargetCapacity(0, 800, 0, 200, 1000, availableKiB)
+	if err != nil || cpu != 1000 {
+		t.Fatalf("exact fit rejected: cpu=%d err=%v", cpu, err)
+	}
+	for _, tc := range []struct {
+		availableCPU, memoryKiB uint64
+		want                    string
+	}{
+		{999, availableKiB, "required_cpu_milli=1000 available_cpu_milli=999"},
+		{1000, availableKiB - 1, "required_memory_kib=7324219 available_memory_kib=7324218"},
+	} {
+		_, err := pairTargetCapacity(1, 800, 0, 200, tc.availableCPU, tc.memoryKiB)
+		if !errors.Is(err, clusterbootstrap.ErrPreparationConfig) || !strings.Contains(err.Error(), "pair target 2 capacity") || !strings.Contains(err.Error(), tc.want) {
+			t.Fatalf("missing capacity evidence: %v", err)
+		}
+	}
+	if _, err := pairTargetCapacity(0, clusterSSHCapacityLimit, 0, 1, 1000, availableKiB); !errors.Is(err, clusterbootstrap.ErrPreparationConfig) {
+		t.Fatal("overflow accepted")
+	}
+}
 
 func TestExplicitPairBootHandoffPreservesInputs(t *testing.T) {
 	cohort, original, lease, base := sshPreparationFixture(t)

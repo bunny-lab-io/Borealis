@@ -69,6 +69,22 @@ func (p *clusterSSHPairInstallation) valid() bool {
 	return true
 }
 
+// Compare the same source-owned demand at inspection and after the native
+// proposal. Only public capacity figures can enter the durable failure event.
+func pairTargetCapacity(index int, cpu, memory, instanceCPU, availableCPU, availableKiB uint64) (uint64, error) {
+	requiredCPU, cpuOK := clusterSSHCapacitySum(cpu, instanceCPU)
+	requiredBytes, memOK := clusterSSHCapacitySum(memory, clusterSSHHostMemoryReserveBytes)
+	if !cpuOK || !memOK {
+		return 0, fmt.Errorf("pair target %d capacity sum out of range: %w", index+1, clusterbootstrap.ErrPreparationConfig)
+	}
+	requiredKiB := (requiredBytes + 1023) / 1024
+	if requiredCPU > availableCPU || requiredKiB > availableKiB {
+		return 0, fmt.Errorf("pair target %d capacity required_cpu_milli=%d available_cpu_milli=%d required_memory_kib=%d available_memory_kib=%d: %w",
+			index+1, requiredCPU, availableCPU, requiredKiB, availableKiB, clusterbootstrap.ErrPreparationConfig)
+	}
+	return requiredCPU, nil
+}
+
 func inspectClusterSSHPair(ctx context.Context, work clusterSSHQualificationWork, readers clusterSSHNetworkTargetReaders, fetch clusterSSHPreparationSnapshotRead, report *clusterSSHQualificationReport, stage *int, observe func(string)) error {
 	fail := clusterbootstrap.ErrPreparationConfig
 	report.Version = 2
@@ -146,10 +162,9 @@ func inspectClusterSSHPair(ctx context.Context, work clusterSSHQualificationWork
 		p.Targets = append(p.Targets, clusterSSHPreparationTargetCPU{claim.TargetID, pr.ObservationSHA256, digest, pr.CPU})
 		p.Packages = append(p.Packages, clusterSSHPreparationTargetPackages{claim.TargetID, pr.ObservationSHA256, packages})
 		instance := value.QualificationCPU[i]
-		request, ok := clusterSSHCapacitySum(cpu, instance.RequestMilli)
-		required, fits := clusterSSHCapacitySum(memory, clusterSSHHostMemoryReserveBytes)
-		if !ok || !fits || request > pr.CPU.AllocatableMilli || required > pr.CPU.MemoryKiB*1024 {
-			return fail
+		request, err := pairTargetCapacity(i, cpu, memory, instance.RequestMilli, pr.CPU.AllocatableMilli, pr.CPU.MemoryKiB)
+		if err != nil {
+			return err
 		}
 		p.Demand = append(p.Demand, clusterSSHPreparationCapacityTarget{claim.TargetID, clusterSSHPreparationTargetCapacity{request, memory, clusterSSHHostMemoryReserveBytes, instance}})
 	}
@@ -415,13 +430,14 @@ func (r *kubernetesClusterStepRunner) pairSourceSnapshot(ctx context.Context, a 
 	if !ok {
 		return fail("workload sizing")
 	}
-	for _, t := range a.Cohort.Targets {
+	for i, t := range a.Cohort.Targets {
 		available := uint64(t.Report.CPUCount) * 1000
 		instance, err := clusterSSHInstanceCPUForHost(readNode, t.Report.Hostname, available, usage.LonghornInstanceManagerResources)
-		required, cpuOK := clusterSSHCapacitySum(cpu, instance.RequestMilli)
-		requiredRAM, memOK := clusterSSHCapacitySum(memory, clusterSSHHostMemoryReserveBytes)
-		if err != nil || !cpuOK || !memOK || required > available || requiredRAM > t.Report.MemoryKiB*1024 {
-			return fail("target CPU or memory capacity")
+		if err != nil {
+			return fail(fmt.Sprintf("target %d Longhorn instance CPU policy", i+1))
+		}
+		if _, err := pairTargetCapacity(i, cpu, memory, instance.RequestMilli, available, t.Report.MemoryKiB); err != nil {
+			return clusterSSHPreparationSnapshot{}, err
 		}
 		v.QualificationCPU = append(v.QualificationCPU, instance)
 	}
