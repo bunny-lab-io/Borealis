@@ -35,6 +35,12 @@ func bootstrapHostCommandLocks(t *testing.T) (*os.File, *os.File) {
 }
 
 func TestBootstrapHostCommandFixedPlan(t *testing.T) {
+	policy, err := bootstrapHostCommandPlan(bootstrapHostReconcileAppArmor)
+	if err != nil || policy.program != "/usr/bin/python3" || !slices.Equal(policy.args, []string{
+		"-I", "/opt/Borealis/Data/Engine/K3s/apparmor/ensure_profiles.py", "/opt/Borealis", "/usr/local/bin/k3s",
+	}) {
+		t.Fatal("unexpected prejoin host policy command", err)
+	}
 	start, startErr := bootstrapHostCommandPlan(bootstrapHostStartPreparedK3s)
 	if startErr != nil || start.program != "/usr/bin/systemctl" || strings.Join(start.args, " ") != "start -- k3s.service" || start.timeout != 10*time.Minute {
 		t.Fatal("prepared startup command changed", startErr)

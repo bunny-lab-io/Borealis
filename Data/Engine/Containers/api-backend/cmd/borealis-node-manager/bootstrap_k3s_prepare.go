@@ -40,7 +40,12 @@ func bootstrapNativeK3sActions(expected clusterbootstrap.PreparationExpected, gu
 		},
 		Install: func(ctx context.Context, hostLock, identityLock *os.File) error {
 			return withRoot(ctx, func(root *os.Root) error {
-				if observeBootstrapAbsentUnit(ctx, "k3s.service") != nil || installBootstrapPrejoinK3sFilesWith(ctx, root, expected, check) != nil {
+				// The transaction has verified the root-owned source and pinned K3s
+				// binary. Complete host policy before publishing the service files
+				// that a later read-only reconciliation can accept as installed.
+				if observeBootstrapAbsentUnit(ctx, "k3s.service") != nil ||
+					runBootstrapHostCommand(ctx, bootstrapHostReconcileAppArmor, hostLock, identityLock, guard, executor, check) != nil ||
+					installBootstrapPrejoinK3sFilesWith(ctx, root, expected, check) != nil {
 					return errBootstrapSource
 				}
 				return runBootstrapHostCommand(ctx, bootstrapHostReloadUnits, hostLock, identityLock, guard, executor, check)

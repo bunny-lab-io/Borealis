@@ -23,6 +23,7 @@ const (
 	bootstrapHostEnableISCSI
 	bootstrapHostEnableFirewall
 	bootstrapHostStartPreparedK3s
+	bootstrapHostReconcileAppArmor
 )
 
 type bootstrapHostCommandSpec struct {
@@ -51,6 +52,9 @@ func bootstrapHostCommandPlan(step bootstrapHostCommand) (bootstrapHostCommandSp
 		spec.program, spec.args = "/usr/bin/systemctl", []string{"disable", "--now", "--", unit}
 	case bootstrapHostReloadUnits:
 		spec.program, spec.args = "/usr/bin/systemctl", []string{"daemon-reload"}
+	case bootstrapHostReconcileAppArmor:
+		spec.program = "/usr/bin/python3"
+		spec.args = []string{"-I", "/opt/Borealis/Data/Engine/K3s/apparmor/ensure_profiles.py", "/opt/Borealis", "/usr/local/bin/k3s"}
 	case bootstrapHostStartPreparedK3s:
 		// First start only, under a durable startup intent and both exclusions.
 		// Timeout/transport loss is unknown; reconciliation never replays start.

@@ -2994,7 +2994,7 @@ ensure_k3s_cluster_baseline() {
   verify_k3s_kubeconfig
   wait_for_k3s_nodes_ready
   verify_k3s_container_runtime
-  run_privileged python3 -I "${SCRIPT_DIR}/Data/Engine/K3s/apparmor/ensure_profiles.py" "${SCRIPT_DIR}"
+  run_privileged python3 -I "${SCRIPT_DIR}/Data/Engine/K3s/apparmor/ensure_profiles.py" "${SCRIPT_DIR}" "$(k3s_binary_path)"
   verify_k3s_packaged_ingress_disabled
   ensure_k3s_namespace
   label_k3s_nodes

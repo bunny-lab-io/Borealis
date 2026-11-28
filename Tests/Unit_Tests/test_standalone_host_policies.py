@@ -1,6 +1,7 @@
 import hashlib
 import importlib.util
 import os
+import re
 import subprocess
 from pathlib import Path
 import tempfile
@@ -63,6 +64,20 @@ class StandaloneHostTests(unittest.TestCase):
         source = (policy.ASSETS / "cri-containerd.original").read_bytes()
         self.assertEqual(hashlib.sha256(source.replace(policy.SIGNAL, policy.SIGNAL + policy.PEER)).hexdigest(),
                          "370f83385db24056bb9d53e1b5cfd5732a0ef8303799cd92534786e41300a43d")
+
+    def test_projected_key_allows_only_the_numeric_generation_and_private_key(self):
+        rule = policy.projected_wireguard_key_rule().decode()
+        prefix = "  /opt/Borealis/Engine/Services/wireguard-tunnel/secrets/.."
+        self.assertTrue(rule.startswith(prefix))
+        self.assertTrue(rule.endswith("/server_private.key r,\n"))
+        stamp, suffix = rule[len(prefix):-len("/server_private.key r,\n")].split(".")
+        self.assertEqual(stamp.split("_"), ["[0-9]" * width for width in (4, 2, 2, 2, 2, 2)])
+        self.assertEqual(suffix, "{" + ",".join("[0-9]" * width for width in range(1, 11)) + "}")
+        generation = re.compile(stamp + r"\.(?:" + "|".join(suffix[1:-1].split(",")) + ")")
+        for ending in ("0", "3789378713"):
+            self.assertIsNotNone(generation.fullmatch("2026_11_28_06_17_08." + ending))
+        for ending in ("", "1x", "12345678901", "2/other"):
+            self.assertIsNone(generation.fullmatch("2026_11_28_06_17_08." + ending))
 
     def test_conflict_and_failed_verification_preserve_policy(self):
         with tempfile.TemporaryDirectory() as directory:

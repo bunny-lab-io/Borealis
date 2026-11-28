@@ -23,6 +23,15 @@ SIGNAL = b"  signal (send,receive) peer=cri-containerd.apparmor.d,\n"
 PEER = b"  signal (send,receive) peer=cri-containerd.apparmor.d//&unconfined,\n"
 
 
+def projected_wireguard_key_rule():
+    # Kubernetes' AtomicWriter names a generation ..YYYY_MM_DD_HH_MM_SS.<uint32>.
+    digit = "[0-9]"
+    timestamp = "_".join(digit * width for width in (4, 2, 2, 2, 2, 2))
+    suffix = "{" + ",".join(digit * width for width in range(1, 11)) + "}"
+    root = "/opt/Borealis/Engine/Services/wireguard-tunnel/secrets"
+    return f"  {root}/..{timestamp}.{suffix}/server_private.key r,\n".encode()
+
+
 def checked(data, digest):
     if hashlib.sha256(data).hexdigest() != digest:
         raise RuntimeError("Host AppArmor policy differs from its reviewed baseline")
@@ -93,7 +102,7 @@ def reconcile(name, target, source, original, addition, baseline_hash, corrected
     print(f"Verified enforcing {name}. Original and diff in {evidence}", flush=True)
 
 
-def main(root):
+def main(root, k3s_binary):
     distro = platform.freedesktop_os_release()
     if (distro.get("ID"), distro.get("VERSION_ID")) != ("ubuntu", "26.04"):
         return
@@ -102,13 +111,13 @@ def main(root):
         return
     version = subprocess.check_output(["dpkg-query", "-W", "-f=${Version}", "apparmor"], text=True)
     if version != "5.0.2-0ubuntu1~26.04.1":
-        if EVIDENCE.exists() and any((EVIDENCE / name).is_dir() for name in (CRI, "wg-quick")):
+        if EVIDENCE.exists() and any((EVIDENCE / name).is_dir() for name in (CRI, "wg-quick", "wg")):
             raise RuntimeError("AppArmor package changed. Review installed exceptions under #543 and #544.")
         return
     EVIDENCE.mkdir(mode=0o700, parents=True, exist_ok=True)
     with (EVIDENCE / ".lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
-        k3s = subprocess.check_output(["k3s", "--version"], text=True).splitlines()[0].split()
+        k3s = subprocess.check_output([k3s_binary, "--version"], text=True).splitlines()[0].split()
         if k3s[:3] == ["k3s", "version", "v1.36.3+k3s1"]:
             original = ASSETS / "cri-containerd.original"
             base = original.read_bytes()
@@ -127,7 +136,13 @@ def main(root):
                       (ASSETS / "wg-quick.local").read_bytes(),
                       "6a39756f1e20f229b6bc31e643c4558c40078ab117c0f8de79cc6a77f8637f26",
                       "1ece7aeda07278518e0e6375f4c6c4ffa23c4a704588422831eab44a831396f6", 3)
+        vendor = POLICY / "wg"
+        if root == Path("/opt/Borealis") and vendor.exists():
+            checked(vendor.read_bytes(), "8113198a4ae411072bdeb8774c5353512b7e501c24f5d04161eed8d5b17a5c08")
+            reconcile("wg", POLICY / "local/wg", vendor, vendor, projected_wireguard_key_rule(),
+                      "90e72cb9a3ed22b813a55b16a5fd3091135c2c4b8ae515120b009d6c798119bd",
+                      "c0db79965e1839874765fca6fda09220bebbcf5e9dc0642440f01a74622bc1df", 0)
 
 
 if __name__ == "__main__":
-    main(Path(sys.argv[1]))
+    main(Path(sys.argv[1]), sys.argv[2])
