@@ -9195,6 +9195,17 @@ load_deployment_profile_tuning() {
   load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)" "${inherited_rank}" "${inherited_memory_mib}"
 }
 
+# The local installer keeps automatic selection until conversion. Workloads and
+# the original controller publish the effective source sizing for joining hosts.
+write_profile_environments() {
+  cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
+  printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\n' \
+    "${PROFILE_CLUSTER_SIZING_RANK}" "${PROFILE_CLUSTER_SIZING_MEMORY_MIB}" >> "${COMPOSE_ENV}"
+  printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\n' \
+    "${PROFILE_CLUSTER_SIZING_RANK:-${PROFILE_RANK}}" \
+    "${PROFILE_CLUSTER_SIZING_MEMORY_MIB:-${PROFILE_HOST_MEMORY_MIB}}" >> "${RUNTIME_ENV}"
+}
+
 ensure_profile_infrastructure_resources() {
   # The original Engine owns these conversion inputs. Joined nodes consume the
   # resulting shared workloads and admission policy, including explicit overrides.
@@ -9416,8 +9427,6 @@ BOREALIS_DEPLOYMENT_MEMORY_RANK=${PROFILE_MEMORY_RANK}
 BOREALIS_DEPLOYMENT_HOST_VCPU=${PROFILE_HOST_VCPU}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=${PROFILE_HOST_MEMORY_MIB}
 BOREALIS_DEPLOYMENT_HOST_MEMORY_GIB=${PROFILE_HOST_MEMORY_GIB}
-BOREALIS_CLUSTER_SIZING_RANK=${PROFILE_CLUSTER_SIZING_RANK}
-BOREALIS_CLUSTER_SIZING_MEMORY_MIB=${PROFILE_CLUSTER_SIZING_MEMORY_MIB}
 
 BOREALIS_API_BACKEND_MEMORY_LIMIT=${BOREALIS_API_BACKEND_MEMORY_LIMIT:-${PROFILE_API_BACKEND_MEMORY_LIMIT}}
 BOREALIS_API_BACKEND_CPU_LIMIT=${BOREALIS_API_BACKEND_CPU_LIMIT:-${PROFILE_API_BACKEND_CPU_LIMIT}}
@@ -9526,7 +9535,7 @@ EOF
 
   write_webui_mode_env_file "${WEBUI_ENV}" "${mode}"
 
-  cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
+  write_profile_environments
   cat >> "${COMPOSE_ENV}" <<EOF
 BOREALIS_OPERATOR_IMAGE=${IMAGE_TAGS[borealis-operator]:-borealis-engine/borealis-operator:local}
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}

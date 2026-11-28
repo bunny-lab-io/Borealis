@@ -86,7 +86,7 @@ On a standalone **Small Business** or **MSP / Production** Engine, deployment cr
 | Longhorn UI, pre-pull, driver-deployer, and wait-init (each) | 25m | 32Mi | 250m | 128Mi |
 | Longhorn instance manager | Calculated by Longhorn on each node | 256Mi | 4 | 1Gi |
 
-Conversion uses the original Engine’s validated files to configure the shared workloads and the storage-process admission policy. Joining Engines inherit those effective bounds, including source overrides. Longhorn stores the seven [CSI component settings](#set-storage-service-bounds) in a shared cluster setting.
+The original Engine publishes its selected profile rank and reference memory with its runtime configuration. Joining hosts inherit these values and must pass their own capacity checks. Conversion uses the original Engine’s validated files to configure the shared workloads and the storage-process admission policy. Joining Engines inherit those effective bounds, including source overrides. Longhorn stores the seven [CSI component settings](#set-storage-service-bounds) in a shared cluster setting.
 
 The nine controller files are `system-upgrade-resources.json`, `cert-manager-controller-resources.json`, `cert-manager-webhook-resources.json`, `cert-manager-cainjector-resources.json`, `longhorn-manager-resources.json`, `longhorn-pre-pull-resources.json`, `longhorn-ui-resources.json`, `longhorn-driver-deployer-resources.json` and `longhorn-driver-wait-resources.json`. Use this structure in each file, replacing every placeholder with values approved for that component:
 

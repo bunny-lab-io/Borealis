@@ -31,6 +31,27 @@ class EngineClusterRecoveryTests(unittest.TestCase):
             check=False,
         )
 
+    def test_runtime_secret_publishes_sizing_without_pinning_standalone_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_engine_library(r'''
+RUNTIME_ENV="$TEST_DIRECTORY/runtime.env"
+COMPOSE_ENV="$TEST_DIRECTORY/compose.env"
+for inputs in "16 35047" "24 65536 2 35047"; do
+  load_profile_tuning $inputs
+  printf 'PRESERVED=yes\n' > "$RUNTIME_ENV"
+  write_profile_environments
+  printf 'local=%s/%s\n' "$(read_env_value BOREALIS_CLUSTER_SIZING_RANK)" "$(read_env_value BOREALIS_CLUSTER_SIZING_MEMORY_MIB)"
+  borealis_runtime_env_secret_data "$RUNTIME_ENV"
+done
+''', extra_env={"TEST_DIRECTORY":directory})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([s for s in result.stdout.splitlines() if s.startswith("local=")],
+                         ["local=/", "local=2/35047"])
+        for key, value in (("PRESERVED", "yes"), ("BOREALIS_CLUSTER_SIZING_RANK", "2"),
+                           ("BOREALIS_CLUSTER_SIZING_MEMORY_MIB", "35047")):
+            encoded = base64.b64encode(value.encode()).decode()
+            self.assertEqual(result.stdout.count(f'  {key}: "{encoded}"\n'), 2)
+
     def test_cluster_sizing_preserves_source_tuning_on_larger_target(self):
         def tuning(cpu, memory, rank="", reference=""):
             result = self.run_engine_library(

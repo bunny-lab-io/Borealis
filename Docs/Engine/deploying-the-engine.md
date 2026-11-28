@@ -235,6 +235,8 @@ Public deployment does not report WebUI accessible until Traefik serves hostname
 !!! info "Fresh host package activity"
     Ubuntu may still be running its automatic package updater when first deployment starts. Borealis waits up to five minutes for the package-manager lock instead of failing immediately or stopping that updater.
 
+The standalone installer recalculates sizing from the resources visible to Linux on redeployment. It publishes the effective rank and memory reference in the runtime configuration so joining Engines can inherit the same tuning. A joining Engine retains the source reference even when it has more RAM.
+
 On the affected Ubuntu 26.04.1 AppArmor package, a standard installation verifies the enforcing host policies before starting Engine workloads. It installs scoped rules for the affected K3s runtime and WireGuard. On a standalone Engine, the listener can reread its existing key after restart. In a cluster, it reads the same named key from Kubernetes’ numeric Secret generations. Both rules grant read access only. If an existing local policy conflicts, deployment stops and identifies its path. Original policy evidence and exact diffs are kept under `/var/lib/borealis/apparmor`. Review the removal criteria before upgrading a host carrying these corrections. [PostgreSQL signaling](https://github.com/bunny-lab-io/Borealis/issues/543) · [WireGuard startup](https://github.com/bunny-lab-io/Borealis/issues/544)
 
 ### Local Redeploy Commands
