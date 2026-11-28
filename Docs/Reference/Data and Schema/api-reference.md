@@ -20,6 +20,11 @@ Public `/api/*` routes validate path/query/body input before domain work where s
     - `GET /health` (No Authentication) - liveness probe.
 
     ### Authentication and Access Management
+    - `GET /api/bootstrap/state` (Public) returns the current first-run or login phase. Use its phase to select the next step.
+    - `POST /api/bootstrap/aegis/setup` (First run) establishes the cipher during `aegis_setup_required`. Send `cipher` in the HTTPS JSON body.
+    - `POST /api/bootstrap/aegis/unlock` (Configured Engine) accepts the existing `cipher` during `aegis_unlock_required`. Check the bootstrap state again before login.
+    - `POST /api/bootstrap/admin/setup` (First run) begins first-administrator enrollment during `admin_setup_required`. The response supplies a short-lived `pending_token` and authenticator enrollment secret. Keep these private.
+    - `POST /api/bootstrap/admin/mfa/verify` (Pending bootstrap enrollment) verifies `pending_token` and the current authenticator `code` to complete administrator setup. Subsequent administrator logins use the normal login and MFA endpoints.
     - `POST /api/auth/login` (No Authentication) - operator login. Borealis requires MFA setup or verification by default unless an administrator has explicitly disabled MFA for that operator.
     - `POST /api/auth/logout` (Token Authenticated) - operator logout.
     - `POST /api/auth/password/reset` (Token Authenticated) - verify the current operator password and replace it with a new password hash.
