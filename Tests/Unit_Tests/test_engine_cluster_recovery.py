@@ -503,6 +503,31 @@ fi
         )
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_unattended_source_bootstrap_preserves_input_and_uses_account_home(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "Engine.sh"
+            target.write_text('#!/bin/bash\nread -r line\nprintf "%s\\n" "$HOME" "$line" "$@"\n')
+            target.chmod(0o755)
+            env = dict(os.environ, BOREALIS_ENGINE_LIBRARY_MODE="1")
+            env.pop("HOME", None)
+            account = subprocess.check_output(["getent", "passwd", str(os.geteuid())], text=True)
+            result = subprocess.run(
+                ["bash", "-c", '''
+source "$1"
+source_available() { return 1; }
+sync_repo() { :; }
+log() { :; }
+INSTALL_DIR="$2"
+LAUNCH_ARGS=(deploy prod)
+sync_and_reexec_if_needed
+''', "bootstrap-test", str(REPO_ROOT / "Engine.sh"), directory],
+                env=env, input="piped input\n", capture_output=True, text=True, start_new_session=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), [account.split(":")[5], "piped input", "deploy", "prod"])
+            preserved = self.run_engine_library('printf "%s" "$HOME"', extra_env={"HOME": directory})
+            self.assertEqual(preserved.stdout, directory)
+
     def test_engine_release_version_uses_clean_commit_backed_development_identity(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             repo = pathlib.Path(temp_dir) / "repo"

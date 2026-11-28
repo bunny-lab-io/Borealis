@@ -5,6 +5,13 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# System services can start without HOME. Keep client caches outside the source checkout.
+if [[ -z "${HOME:-}" ]]; then
+  HOME="$(getent passwd "${EUID}" | cut -d: -f6)"
+  [[ "${HOME}" == /* && -d "${HOME}" ]] || { printf 'Cannot resolve installer account home.\n' >&2; exit 1; }
+  export HOME
+fi
+
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 else
@@ -2131,7 +2138,7 @@ sync_and_reexec_if_needed() {
 
   sync_repo
   log "Launching ${INSTALL_DIR}/Engine.sh ${LAUNCH_ARGS[*]:-deploy}."
-  if [[ ! -t 0 && -r /dev/tty ]]; then
+  if [[ ! -t 0 ]] && ( : </dev/tty ) 2>/dev/null; then
     exec "${INSTALL_DIR}/Engine.sh" "${LAUNCH_ARGS[@]}" < /dev/tty
   fi
   exec "${INSTALL_DIR}/Engine.sh" "${LAUNCH_ARGS[@]}"

@@ -364,6 +364,7 @@ After deployment finishes:
 
     ### Bootstrap and runtime separation
 
+    - During source bootstrap, the installer reopens a controlling terminal when available and otherwise preserves the launcher's standard input. When a service launcher omits `HOME`, the installer uses the account's home directory so kubectl discovery caches stay outside the checkout. Cluster conversion requires a clean source tree.
     - Stable fresh installs start with release asset `Install-Engine.sh`, never raw branch content. Bootstrap reads exact GitHub release, requires `draft=false`, `prerelease=false`, and `immutable=true`, validates GitHub SHA-256 asset digests, validates manifest repository/release/platform/asset URL/hash/size identity, resolves tag to full commit SHA, and passes exact release/SHA pair to `Engine.sh`.
     - `Engine.sh` fetches exact tag ref, verifies tag commit and checked-out `HEAD` against bootstrap-provided SHA, then re-executes checked-out script. Stable sync has no latest-tag lookup and no fallback to `main`.
     - Mutable branch/ref sync is development-only and requires explicit `--release-channel unstable`. Existing local `Engine.sh` execution performs no Git sync unless repo/release options request it.
