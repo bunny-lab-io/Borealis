@@ -1957,6 +1957,12 @@ func TestClusterActionJobIdentityRejectsImmutableMismatch(t *testing.T) {
 		{name: "operation label", mutate: func(job map[string]any) {
 			nestedMap(job, "metadata")["labels"].(map[string]any)["borealis.io/operation-id"] = "different-operation"
 		}},
+		{name: "unexpected retry budget", mutate: func(job map[string]any) {
+			job["spec"].(map[string]any)["backoffLimit"] = 2
+		}},
+		{name: "unexpected Pod failure policy", mutate: func(job map[string]any) {
+			job["spec"].(map[string]any)["podFailurePolicy"] = map[string]any{"rules": []any{}}
+		}},
 		{name: "step annotation", mutate: func(job map[string]any) {
 			nestedMap(job, "metadata")["annotations"].(map[string]any)["borealis.io/operation-step"] = "different-step"
 		}},
@@ -1990,6 +1996,71 @@ func TestClusterActionJobIdentityRejectsImmutableMismatch(t *testing.T) {
 			test.mutate(actual)
 			if err := validateClusterActionJobIdentity(actual, expected); err == nil {
 				t.Fatal("mismatched Kubernetes Job accepted")
+			}
+		})
+	}
+}
+
+func TestCandidateHealthJobDuringManagerReplacement(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, verb string
+		retry, succeeds  bool
+	}{
+		{"fresh observation succeeds", "engine_update", "InspectCandidateHealth", true, true},
+		{"health failure is terminal", "engine_update", "InspectCandidateHealth", true, false},
+		{"promotion cannot replay", "engine_update", "PromoteCandidate", false, false},
+		{"other workflows retain zero retries", "hmr_exit", "InspectCandidateHealth", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var job map[string]any
+			polls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if req.Method == http.MethodPost {
+					if err := json.NewDecoder(req.Body).Decode(&job); err != nil {
+						t.Error(err)
+					}
+					spec := nestedMap(job, "spec")
+					policy, _ := json.Marshal(spec["podFailurePolicy"])
+					if tc.retry {
+						want := `{"rules":[{"action":"FailJob","onExitCodes":{"containerName":"action","operator":"NotIn","values":[128]}}]}`
+						if coerceInt64(spec["backoffLimit"]) != 1 || string(policy) != want {
+							t.Errorf("unexpected startup retry policy: %s", policy)
+						}
+					} else if coerceInt64(spec["backoffLimit"]) != 0 || string(policy) != "null" {
+						t.Error("retry applied outside candidate health")
+					}
+				} else if job == nil {
+					http.NotFound(w, req)
+					return
+				} else {
+					polls++
+					status := map[string]any{"failed": 1}
+					if tc.retry && !tc.succeeds {
+						status["conditions"] = []any{map[string]any{"type": "Failed", "status": "True"}}
+					} else if polls > 1 {
+						status["succeeded"] = 1
+					}
+					job["status"] = status
+				}
+				_ = json.NewEncoder(w).Encode(job)
+			}))
+			defer server.Close()
+			runner := &kubernetesClusterStepRunner{
+				kube:      &kubernetesAPIClient{baseURL: server.URL, token: "test", httpClient: server.Client()},
+				namespace: "borealis", actionImage: "registry.example/borealis@sha256:" + strings.Repeat("a", 64),
+				jobPollInterval: time.Millisecond,
+			}
+			op := clusterControllerOperation{ID: "11111111-1111-4111-8111-111111111111", Kind: tc.kind, Attempt: 1}
+			node := clusterControllerNode{ID: "22222222-2222-4222-8222-222222222222", Name: "engine-2"}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			err := runner.nodeActionJob(ctx, op, clusterControllerStep{Name: "candidate_health", NodeID: node.ID}, node, tc.verb)
+			wantPolls := 1
+			if tc.succeeds {
+				wantPolls = 2
+			}
+			if (err == nil) != tc.succeeds || polls != wantPolls {
+				t.Fatalf("polls=%d err=%v", polls, err)
 			}
 		})
 	}

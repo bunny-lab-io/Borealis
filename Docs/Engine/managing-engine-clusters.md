@@ -77,7 +77,7 @@ The replacement workflow retains its surviving-source selection and readiness ch
 
 ### Set Controller Resource Bounds
 
-On a standalone **Small Business** Engine, deployment creates any missing files for the following components under `Engine/Deploy`. Review the values before conversion. To override a component, edit its file before enabling the cluster. Redeployment preserves existing files. Other profiles require explicit values for these components.
+On a standalone **Small Business** or **MSP / Production** Engine, deployment creates any missing files for the following components under `Engine/Deploy`. Review the values before conversion. To override a component, edit its file before enabling the cluster. Redeployment preserves existing files. Other profiles require explicit values for these components.
 
 | Component | CPU request | Memory request | CPU limit | Memory limit |
 | --- | ---: | ---: | ---: | ---: |
@@ -128,9 +128,9 @@ Successful validation prints canonical resource JSON. Missing or invalid configu
 
 Longhorn’s storage connection service (`csi-attacher`), volume-creation service (`csi-provisioner`), volume-expansion service (`csi-resizer`) and storage-snapshot service (`csi-snapshotter`) each need explicit CPU and memory requests and limits before cluster qualification. The storage connector on each Engine also needs separate bounds for its driver (`longhorn-csi-plugin`), registrar (`node-driver-registrar`) and health probe (`longhorn-liveness-probe`). Longhorn already provides this configuration; its empty default does not give Borealis a bounded capacity estimate.
 
-Small Business installations and redeployments fill missing components in this setting. Existing component entries and unrelated settings are preserved. When all entries already exist, deployment skips the write. Joining Engines use the source cluster’s CSI Deployments and node-plugin DaemonSet.
+Small Business and MSP / Production installations and redeployments fill missing components in this setting. Existing component entries and unrelated settings are preserved. When all entries already exist, deployment skips the write. Joining Engines use the source cluster’s CSI Deployments and node-plugin DaemonSet.
 
-| Small Business component | CPU / memory request | CPU / memory limit |
+| Component | CPU / memory request | CPU / memory limit |
 |---|---|---|
 | Each of attacher, provisioner, resizer and snapshotter | 25m / 64Mi | 250m / 128Mi |
 | Node driver | 50m / 64Mi | 500m / 256Mi |
@@ -178,7 +178,7 @@ Borealis checks the service Deployments, storage connector DaemonSet and their o
 
 ### Set Storage-process Bounds
 
-Review `Engine/Deploy/longhorn-instance-manager-resources.json` alongside the nine controller files before conversion. Small Business deployments generate the values above. For an override or a profile without defaults, supply the memory request and CPU/memory limits:
+Review `Engine/Deploy/longhorn-instance-manager-resources.json` alongside the nine controller files before conversion. Small Business and MSP / Production deployments generate the values above. For an override or a profile without defaults, supply the memory request and CPU/memory limits:
 
 ```json
 {
@@ -2206,6 +2206,7 @@ Before upgrading from a release without this ownership protocol, let active work
 - `RedeployRevision` accepts the matching marker/image manifest before creating the candidate, preventing the target process from starting against pre-expand schema.
 - Node redeploy starts the target release's staged manager as a separate transient activator outside the old service sandbox.
 - The activator validates the pinned worktree and its own staged inode, waits until the node-action Job leaves Running or Pending state, atomically installs the target binary plus systemd unit, restarts the node manager outside the old service cgroup, verifies the running process uses the installed inode plus recreated Unix socket, and then records the target SHA in `/etc/borealis/node-manager-revision`.
+- During an Engine update, a read-only candidate health Job can make one more Pod attempt if the runtime exits 128 while starting the action container during node-manager replacement. Kubernetes remounts the socket for the new Pod. A reported health failure stops the Job immediately. The initial check and both soak observations still require successful health responses.
 - A single-file socket mount holds the inode selected for that Job. If an independently scheduled host refresh overlaps the first candidate-health Job, compare the Job's connection error with the node-manager service journal. A refusal to replace a non-socket at the same instant requires reconciliation of the service restart. Preserve socket ownership, the token, the node drain and both candidate-health checks.
 - The release picker requests ten GitHub releases per page because GitHub includes attachment metadata for every listed release. Each response retains its 2 MiB limit. Release-backed clusters stop at the current tag or 2,000 entries. Commit-backed development and standalone clusters inspect up to the most recent 100 entries. Submitting a release through the update endpoint independently resolves the selected tag and rechecks compatibility, ancestry and publication channel.
 - For a supervised qualification update with this demonstrated race, first settle any active operation, verify the available recovery point and wait for the node-action Jobs to finish. Stage the verified immutable manager at the activator's fixed binary path in the exact target worktree. Run the existing target `activate-update` outside the serving unit before submitting the WebUI update. Verify the running executable digest and inode, service health, target revision marker and the recreated root:64646 mode-0660 socket. Verify access through a fresh non-root node-action file mount with the existing authenticated read-only `Status` verb. A matching marker and running installed inode cause `schedule_borealis_node_manager_refresh` to skip the delayed restart. Check compatibility of the staged helper with the serving baseline before using this procedure. The ordinary rollout still performs candidate health, promotion and soak.

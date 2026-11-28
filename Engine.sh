@@ -9198,28 +9198,28 @@ load_deployment_profile_tuning() {
 ensure_profile_infrastructure_resources() {
   # The original Engine owns these conversion inputs. Joined nodes consume the
   # resulting shared workloads and admission policy, including explicit overrides.
-  if [[ "${PROFILE_RANK}" == "1" && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]]; then
-    python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" seed-small-business "${DEPLOY_DIR}"
+  if [[ ( "${PROFILE_RANK}" == "1" || "${PROFILE_RANK}" == "2" ) && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]]; then
+    python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" seed-infrastructure "${DEPLOY_DIR}"
   fi
 }
 
 ensure_profile_csi_resources() {
-  [[ "${PROFILE_RANK}" == "1" && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]] || return 0
+  [[ ( "${PROFILE_RANK}" == "1" || "${PROFILE_RANK}" == "2" ) && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]] || return 0
   k3s_longhorn_enabled || return 0
   local setting="settings.longhorn.io/system-managed-csi-components-resource-limits"
   local patch attempt
   for attempt in 1 2 3; do
     patch="$(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get "${setting}" -o json \
-      | python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" small-business-csi-patch)" \
-      || die "Cannot read Small Business Longhorn CSI resource settings."
+      | python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" infrastructure-csi-patch)" \
+      || die "Cannot read profile Longhorn CSI resource settings."
     [[ -n "${patch}" ]] || return 0
     if k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" patch "${setting}" --type=json -p "${patch}" >> "${BUILD_LOG}" 2>&1; then
-      log_status "k3s-longhorn-storage" "Applied missing Small Business CSI defaults" "${C_GREEN}"
+      log_status "k3s-longhorn-storage" "Applied missing profile CSI defaults" "${C_GREEN}"
       return 0
     fi
     printf 'Longhorn CSI setting patch attempt %s failed.\n' "${attempt}" >> "${BUILD_LOG}"
   done
-  die "Cannot update Small Business Longhorn CSI resource settings. See ${BUILD_LOG}."
+  die "Cannot update profile Longhorn CSI resource settings. See ${BUILD_LOG}."
 }
 
 write_compose_env() {

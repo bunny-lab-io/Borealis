@@ -260,7 +260,7 @@ class SystemUpgradeResourceTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as tmp:
             directory = pathlib.Path(tmp)
-            for profile in (("4", "8192"), ("20", "49152"), ("32", "98304"),
+            for profile in (("4", "8192"), ("32", "98304"), ("32", "98304", "2", "35400"),
                             ("32", "98304", "1", "32071")):
                 deploy(directory, *profile)
                 self.assertEqual(list(directory.iterdir()), [])
@@ -287,6 +287,11 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                 if cpu:
                     requests["cpu"] = cpu
                 self.assertEqual(actual, {"requests": requests, "limits": {"cpu": cap, "memory": memcap}})
+            with tempfile.TemporaryDirectory() as msp_tmp:
+                msp = pathlib.Path(msp_tmp)
+                deploy(msp, "16", "35400")
+                self.assertEqual({p.name: p.read_bytes() for p in msp.iterdir()},
+                                 {p.name: p.read_bytes() for p in directory.iterdir()})
             override = directory / "system-upgrade-resources.json"
             custom = json.dumps(BOUNDS, indent=4)
             override.write_text(custom)
@@ -304,7 +309,7 @@ class SystemUpgradeResourceTests(unittest.TestCase):
 
     def test_csi_defaults_and_optimistic_patch_preserve_existing_entries(self):
         original = {"metadata": {"resourceVersion": "27"}, "value": ""}
-        patch = json.loads(RENDERER.small_business_csi_patch(original))
+        patch = json.loads(RENDERER.infrastructure_csi_patch(original))
         self.assertEqual(patch[0], {"op": "test", "path": "/metadata/resourceVersion", "value": "27"})
         self.assertEqual(patch[1]["path"], "/value")
         effective = json.loads(patch[1]["value"])
@@ -320,13 +325,13 @@ class SystemUpgradeResourceTests(unittest.TestCase):
                                                "limits": {"cpu": cap, "memory": memcap}})
         override = {"csi-attacher": BOUNDS, "future-component": {"extra": True}}
         original["value"] = json.dumps(override)
-        merged = json.loads(json.loads(RENDERER.small_business_csi_patch(original))[1]["value"])
+        merged = json.loads(json.loads(RENDERER.infrastructure_csi_patch(original))[1]["value"])
         self.assertEqual(merged, {**effective, **override})
         original["value"] = json.dumps(merged)
-        self.assertEqual(RENDERER.small_business_csi_patch(original), "")
+        self.assertEqual(RENDERER.infrastructure_csi_patch(original), "")
         for invalid in ('[]', '{"a":{},"a":{}}', 'not-json'):
             with self.assertRaises(ValueError):
-                RENDERER.small_business_csi_patch({**original, "value": invalid})
+                RENDERER.infrastructure_csi_patch({**original, "value": invalid})
 
     def test_csi_deployment_rechecks_conflicts_and_skips_matching_or_inherited_settings(self):
         script = r"""
@@ -351,8 +356,10 @@ k3s_kubectl() {
 }
 PROFILE_RANK=0 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
 PROFILE_RANK=1 PROFILE_CLUSTER_SIZING_RANK=1 ensure_profile_csi_resources
+PROFILE_RANK=2 PROFILE_CLUSTER_SIZING_RANK=2 ensure_profile_csi_resources
+PROFILE_RANK=3 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
 test ! -e calls && test ! -e conflict
-PROFILE_RANK=1 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
+PROFILE_RANK=2 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
 PROFILE_RANK=1 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
 """
         with tempfile.TemporaryDirectory() as tmp:

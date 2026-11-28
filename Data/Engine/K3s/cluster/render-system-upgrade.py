@@ -165,7 +165,7 @@ def render_longhorn_driver(manifest, driver_bounds, wait_bounds):
     return "\n---\n".join(documents)
 
 
-def seed_small_business(directory):
+def seed_infrastructure(directory):
     """Publish complete defaults only for missing source-owned conversion inputs."""
     groups = (
         (("system-upgrade", "cert-manager-controller", "cert-manager-webhook", "cert-manager-cainjector"),
@@ -196,7 +196,7 @@ def seed_small_business(directory):
                     pass
 
 
-def small_business_csi_patch(setting):
+def infrastructure_csi_patch(setting):
     """Fill absent entries in the shared Longhorn Setting using optimistic concurrency."""
     current = setting["value"]
     entries = json.loads(current or "{}", object_pairs_hook=unique_object)
@@ -222,11 +222,11 @@ def small_business_csi_patch(setting):
 
 def main():
     try:
-        if len(sys.argv) == 3 and sys.argv[1] == "seed-small-business":
-            seed_small_business(pathlib.Path(sys.argv[2]))
+        if len(sys.argv) == 3 and sys.argv[1] in ("seed-infrastructure", "seed-small-business"):
+            seed_infrastructure(pathlib.Path(sys.argv[2]))
             return 0
-        if sys.argv[1:] == ["small-business-csi-patch"]:
-            result = small_business_csi_patch(json.load(sys.stdin))
+        if len(sys.argv) == 2 and sys.argv[1] in ("infrastructure-csi-patch", "small-business-csi-patch"):
+            result = infrastructure_csi_patch(json.load(sys.stdin))
         elif len(sys.argv) == 3 and sys.argv[1] == "config":
             result = read_resources(sys.argv[2])
         elif len(sys.argv) == 4 and sys.argv[1] == "manifest":

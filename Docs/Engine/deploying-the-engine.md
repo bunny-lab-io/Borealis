@@ -49,6 +49,8 @@ The CPU and RAM bands below describe current automatic profile selection **per E
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Clustered (3 Engines) | SMB and managed-service production environments | Hundreds per managed site | 4-8 | 16-23 | 32-63 GiB | 12 | 500 GiB |
 
+    This profile starts with the same ten controller and storage-process resource files and seven CSI component settings as Small Business. Deployment fills missing values and preserves operator overrides. Application limits and PostgreSQL tuning follow the MSP / Production profile. [Cluster infrastructure defaults](managing-engine-clusters.md#set-controller-resource-bounds)
+
 === "Enterprise (Clustered)"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |

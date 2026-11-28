@@ -3756,6 +3756,19 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 		args = append(args, removalFenceArgs(fence)...)
 	}
 	manifest := clusterActionJobManifest(jobName, r.namespace, node.Name, actionImage, args, operation.ID, step.Name)
+	retryHealthStartup := operation.Kind == "engine_update" && verb == "InspectCandidateHealth"
+	if retryHealthStartup {
+		// During helper replacement runc can exit 128 before the client starts
+		// because its single-file socket mount disappeared. Retry this read-only
+		// observation once. A client health failure exits 1 and fails immediately.
+		spec := manifest["spec"].(map[string]any)
+		spec["backoffLimit"] = 1
+		spec["podFailurePolicy"] = map[string]any{"rules": []any{map[string]any{
+			"action": "FailJob", "onExitCodes": map[string]any{
+				"containerName": "action", "operator": "NotIn", "values": []int{128},
+			},
+		}}}
+	}
 	if preparedRequest != nil {
 		return r.runClusterSSHPreparedAdmissionJob(ctx, operation, step, node, manifest, *preparedRequest)
 	}
@@ -3779,7 +3792,7 @@ func (r *kubernetesClusterStepRunner) nodeActionJob(ctx context.Context, operati
 	if verb == "EnrollCluster" {
 		return r.waitClusterInitJob(ctx, jobName)
 	}
-	return r.waitJob(ctx, jobName)
+	return r.waitNodeActionJob(ctx, jobName, false, retryHealthStartup)
 }
 
 func clusterOperationActionImage(operation clusterControllerOperation, fallback string) string {
@@ -4150,8 +4163,17 @@ func validateClusterActionJobIdentityForOperation(actual, expected map[string]an
 		return errors.New("operation step annotation mismatch")
 	}
 
-	actualTemplate := nestedMap(nestedMap(actual, "spec"), "template")
-	expectedTemplate := nestedMap(nestedMap(expected, "spec"), "template")
+	actualSpec, expectedSpec := nestedMap(actual, "spec"), nestedMap(expected, "spec")
+	// A Job created by the previous controller can retain its stricter
+	// zero-retry policy. Never adopt a broader retry budget or failure policy.
+	if coerceInt64(actualSpec["backoffLimit"]) != 0 || actualSpec["podFailurePolicy"] != nil {
+		if coerceInt64(actualSpec["backoffLimit"]) != coerceInt64(expectedSpec["backoffLimit"]) ||
+			canonicalJSON(actualSpec["podFailurePolicy"]) != canonicalJSON(expectedSpec["podFailurePolicy"]) {
+			return errors.New("action Job retry policy mismatch")
+		}
+	}
+	actualTemplate := nestedMap(actualSpec, "template")
+	expectedTemplate := nestedMap(expectedSpec, "template")
 	actualStepLabels := clusterStringMap(nestedMap(actualTemplate, "metadata")["labels"])
 	expectedStepLabels := clusterStringMap(nestedMap(expectedTemplate, "metadata")["labels"])
 	if actualStepLabels["borealis.io/operation-step"] != expectedStepLabels["borealis.io/operation-step"] {
@@ -4238,14 +4260,14 @@ func clusterStringSlicesEqual(left, right []string) bool {
 }
 
 func (r *kubernetesClusterStepRunner) waitJob(ctx context.Context, name string) error {
-	return r.waitJobWithAuthorizationTransition(ctx, name, false)
+	return r.waitNodeActionJob(ctx, name, false, false)
 }
 
 func (r *kubernetesClusterStepRunner) waitClusterInitJob(ctx context.Context, name string) error {
-	return r.waitJobWithAuthorizationTransition(ctx, name, true)
+	return r.waitNodeActionJob(ctx, name, true, false)
 }
 
-func (r *kubernetesClusterStepRunner) waitJobWithAuthorizationTransition(ctx context.Context, name string, allowClusterInitAuthorizationTransition bool) error {
+func (r *kubernetesClusterStepRunner) waitNodeActionJob(ctx context.Context, name string, allowClusterInitAuthorizationTransition, retryHealthStartup bool) error {
 	path := fmt.Sprintf("/apis/batch/v1/namespaces/%s/jobs/%s", r.namespace, name)
 	pollInterval := r.jobPollInterval
 	if pollInterval <= 0 {
@@ -4280,7 +4302,10 @@ func (r *kubernetesClusterStepRunner) waitJobWithAuthorizationTransition(ctx con
 			if coerceInt64(status["succeeded"]) > 0 {
 				return nil
 			}
-			if coerceInt64(status["failed"]) > 0 {
+			// A failed Pod is terminal for zero-retry Jobs. For a Job with a
+			// retry budget, Kubernetes decides when the failure is terminal.
+			waitingForRetry := retryHealthStartup && coerceInt64(nestedMap(job, "spec")["backoffLimit"]) == 1
+			if resourceConditionTrue(job, "Failed") || (coerceInt64(status["failed"]) > 0 && !waitingForRetry) {
 				return fmt.Errorf("node action Job %s failed", name)
 			}
 		}
