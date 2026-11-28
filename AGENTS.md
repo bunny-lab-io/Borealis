@@ -36,7 +36,7 @@ unshare --user --map-root-user --net sh -c \
 Setting is a host-wide security relaxation and resets after reboot unless separately persisted. Do not apply automatically, persist it without separate approval, or run VS Code/Codex as root. Never change production hosts or unrelated infrastructure for Codex sandbox access. If unapproved or unavailable, report the exact blocker rather than bypassing the sandbox.
 
 ## Dedicated Development Workstation Boundary
-Codex and future agents use dedicated Linux workstation outside Borealis cluster as source-development and control host.
+Use `bunny-box` as the dedicated Linux source-development and control workstation outside the Borealis cluster.
 
 Allowed on workstation:
 * Edit, review, test, build, commit, and push repository code.
@@ -44,10 +44,22 @@ Allowed on workstation:
 
 Never deploy or run Borealis Engine on workstation. Do not install or start Engine runtime, K3s, cluster workloads, or persistent Borealis services there. Do not use workstation as Engine member, onboarding target, disposable qualification node, or source of live capacity evidence.
 
-Disposable Engine lab nodes are remote targets:
-* `borealis-engine-01` / `192.168.3.252`
-* `borealis-engine-02` / `192.168.3.251`
-* `borealis-engine-03` / `192.168.3.250`
+Temporary, isolated development builds and immutable snapshot packaging may use bunny-box with CPU, memory and I/O limits that keep it responsive. Use disposable build workers without operational credentials or cluster-management sockets. Production installations must remain independent of this workstation.
+
+### Dedicated development lab
+
+| Hostname or endpoint | IPv4 | Initial role |
+|---|---|---|
+| `borealis-node-01` | `192.168.3.18` | Initial Engine |
+| `borealis-node-02` | `192.168.3.19` | Joining Engine |
+| `borealis-node-03` | `192.168.3.20` | Joining Engine |
+| Cluster VIP | `192.168.3.10` | Shared cluster endpoint |
+
+The operator is provisioning three independently installed, fully updated Ubuntu Server 26.04.1 guests, each with 16 vCPUs, 33 GB RAM and 256 GB system storage. This lab uses Proxmox VE, shared clustered iSCSI on TrueNAS ZFS, Proxmox write-back disk caching and SSD emulation. VM IDs and physical host placement await operator confirmation. Shared storage limits the failure domains this lab can qualify.
+
+Wait for explicit readiness confirmation before connecting. Verify each new guest and its distinct SSH host fingerprint through a trusted channel. Use fresh host, VM and runtime identities. The edge reverse proxy initially targets Node01 at `192.168.3.18`; move it to `192.168.3.10` after successful clustering under the authorized cutover procedure.
+
+Start from a clean Node01 installation with a new database and Aegis identity, no managed devices and no onboarding journals. Use the normal WebUI pair workflow. Preserve the retired lab and its stopped operation offline for evidence. Its pins, recovery packages, boot handoff, journals and execution authorizations belong exclusively to that lab. Do not contact or resume it.
 
 Access all three through SSH from workstation for separately authorized inspection, deployment, runtime repair, and qualification. Never edit deployed checkout as development source. Before any command that can install, deploy, start, stop, restart, reconfigure, or qualify Engine runtime, verify local hostname is not an Engine node, identify exact remote target, and confirm applicable authorization and documented procedure. Repository implementation authorization does not authorize remote runtime action.
 
