@@ -30,6 +30,8 @@ Scheduled script jobs support:
 
 If no eligible current-user helper exists, Borealis records dispatch failure instead of falling back to SYSTEM.
 
+Tracked Windows current-user jobs retain capacity until their original process exits and cleanup finishes. A timeout or cancellation request does not prove exit. Preserve unresolved job history and the Agent execution journal after an interrupted run; reconnect retries recorded completion and does not rerun uncertain work.
+
 ## Use Variables
 
 Define variables in the assembly when values should change by run. Borealis injects variables into agent-side script environment and rewrites PowerShell `$env:VAR` references before dispatch.

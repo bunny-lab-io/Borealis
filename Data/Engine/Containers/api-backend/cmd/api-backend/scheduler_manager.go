@@ -49,16 +49,19 @@ const (
 )
 
 type goSchedulerManager struct {
-	cfg         gatewayConfig
-	store       *postgresOperatorStore
-	secret      []byte
-	apiBase     string
-	projectRoot string
-	httpClient  *http.Client
-	operator    *borealisOperatorClient
+	leaseTransport leaseExecutor
+	ownershipDB    *sql.DB
+	cfg            gatewayConfig
+	store          *postgresOperatorStore
+	secret         []byte
+	apiBase        string
+	projectRoot    string
+	httpClient     *http.Client
+	operator       *borealisOperatorClient
 }
 
 type schedulerWorkItem struct {
+	LeaseOwner   string
 	ID           int64
 	Kind         string
 	SiteID       sql.NullInt64
@@ -85,26 +88,24 @@ type schedulerRoute struct {
 }
 
 func runGoJobSchedulerManager(ctx context.Context, cfg gatewayConfig) error {
-	store, closeStore, err := openOperatorStore(cfg)
+	pgStore, ownershipDB, closeStore, err := openSchedulerStores(cfg)
 	if err != nil {
 		return err
 	}
 	defer closeStore()
-	pgStore, ok := store.(*postgresOperatorStore)
-	if !ok {
-		return errors.New("postgres store required")
-	}
 	secret, err := loadOrCreateEngineSecret(cfg.EngineSecretPath)
 	if err != nil {
 		return err
 	}
 	manager := &goSchedulerManager{
-		cfg:         cfg,
-		store:       pgStore,
-		secret:      []byte(secret),
-		apiBase:     strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/"),
-		projectRoot: envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"),
-		httpClient:  &http.Client{Timeout: 30 * time.Second},
+		leaseTransport: &postgresLeaseTransport{dsn: normalizePostgresDriverURL(cfg)},
+		ownershipDB:    ownershipDB,
+		cfg:            cfg,
+		store:          pgStore,
+		secret:         []byte(secret),
+		apiBase:        strings.TrimRight(envDefault("BOREALIS_INTERNAL_API_BASE_URL", "http://127.0.0.1:5000"), "/"),
+		projectRoot:    envDefault("BOREALIS_PROJECT_ROOT", "/opt/Borealis"),
+		httpClient:     &http.Client{Timeout: 30 * time.Second},
 	}
 	return manager.run(ctx)
 }
@@ -146,7 +147,10 @@ func schedulerWorkerHistorySeconds() int {
 }
 
 func (m *goSchedulerManager) run(ctx context.Context) error {
-	if err := m.ensureTables(ctx); err != nil {
+	bootstrapCtx, bootstrapCancel := context.WithTimeout(ctx, 30*time.Second)
+	err := m.ensureTables(bootstrapCtx)
+	bootstrapCancel()
+	if err != nil {
 		return err
 	}
 	if !schedulerLeadershipEligible() {
@@ -155,9 +159,41 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		return nil
 	}
 	log.Printf("Go job-scheduler manager starting")
-	holder := firstText(strings.TrimSpace(os.Getenv("HOSTNAME")), newClusterUUID())
-	wasLeader := false
+	for ctx.Err() == nil {
+		holder := firstText(strings.TrimSpace(os.Getenv("HOSTNAME")), "job-scheduler") + "/" + newClusterUUID()
+		confirmed := time.Now()
+		owned, err := m.acquireSchedulerLeadership(ctx, holder, confirmed.Unix())
+		if err == nil && owned {
+			guard := startOwnershipLeaseGuard(ctx, 5*time.Second, 15*time.Second, confirmed, errSchedulerOwnershipLost, func(renewCtx context.Context) (bool, error) {
+				return m.acquireSchedulerLeadership(renewCtx, holder, time.Now().Unix())
+			})
+			m.store.db.SetMaxIdleConns(0)
+			m.store.db.SetMaxIdleConns(m.cfg.DBMaxIdleConns)
+			m.ownershipPool().SetMaxIdleConns(0)
+			m.ownershipPool().SetMaxIdleConns(m.cfg.DBMaxIdleConns)
+			ownerCtx := context.WithValue(guard.Context(), schedulerOwnerContextKey{}, holder)
+			log.Printf("Go job-scheduler manager acquired active leadership holder=%s", holder)
+			_ = m.runLeader(ownerCtx)
+			guard.Close()
+		} else if err != nil {
+			log.Printf("job-scheduler leadership unavailable: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-time.After(2 * time.Second):
+		}
+	}
+	return nil
+}
 
+func (m *goSchedulerManager) runLeader(ctx context.Context) error {
+	workersObserved := false
+	if err := m.reconcileSiteWorkers(ctx); err != nil {
+		log.Printf("site-worker leadership reconcile failed: %v", err)
+	} else {
+		workersObserved = true
+	}
 	nextTick := int64(0)
 	nextReconcile := int64(0)
 	reconcileInterval := int64(envInt("BOREALIS_SITE_WORKER_RECONCILE_SECONDS", 30, 10, 3600))
@@ -173,22 +209,6 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		case <-ticker.C:
 		}
 		now := time.Now().Unix()
-		leader, err := m.acquireSchedulerLeadership(ctx, holder, now)
-		if err != nil {
-			log.Printf("job-scheduler leadership unavailable: %v", err)
-			continue
-		}
-		if !leader {
-			wasLeader = false
-			continue
-		}
-		if !wasLeader {
-			log.Printf("Go job-scheduler manager acquired active leadership holder=%s", holder)
-			if err := m.reconcileSiteWorkers(ctx); err != nil {
-				log.Printf("site-worker leadership reconcile failed: %v", err)
-			}
-			wasLeader = true
-		}
 		if err := m.heartbeatManager(ctx); err != nil {
 			log.Printf("job-scheduler manager heartbeat failed: %v", err)
 		}
@@ -198,29 +218,17 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 			}
 			nextTick = now + maxInt64(60-(now%60), 5)
 		}
-		if now >= nextReconcile {
-			if err := m.reconcileSiteWorkers(ctx); err != nil {
-				log.Printf("site-worker reconcile failed: %v", err)
-			}
+		refreshWorkers := now >= nextReconcile
+		if refreshWorkers {
 			nextReconcile = now + reconcileInterval
 		}
 		if err := m.expireStaleLeases(ctx); err != nil {
 			log.Printf("stale lease expiration failed: %v", err)
 		}
-		if err := m.markLostWorkers(ctx); err != nil {
-			log.Printf("worker lost-state update failed: %v", err)
-		}
-		if err := m.pruneWorkerHistory(ctx, historySeconds); err != nil {
-			log.Printf("worker history prune failed: %v", err)
-		}
-		siteIDs, err := m.siteIDsNeedingWorkers(ctx)
-		if err != nil {
-			log.Printf("site worker demand lookup failed: %v", err)
-		}
-		for _, siteID := range siteIDs {
-			if err := m.spawnSiteWorker(ctx, siteID); err != nil {
-				log.Printf("failed to reconcile worker for site_id=%d: %v", siteID, err)
-			}
+		var workerErr error
+		workersObserved, workerErr = m.reconcileSiteWorkerLifecycle(ctx, refreshWorkers, workersObserved, historySeconds)
+		if workerErr != nil {
+			log.Printf("site-worker lifecycle unavailable: %v", workerErr)
 		}
 		if err := m.processServiceAction(ctx); err != nil {
 			log.Printf("failed to process service action queue: %v", err)
@@ -233,6 +241,9 @@ func (m *goSchedulerManager) run(ctx context.Context) error {
 		}
 		if err := m.processPatchInstallWork(ctx); err != nil {
 			log.Printf("failed to process patch install work: %v", err)
+		}
+		if err := m.processPatchPolicyEnforcementWork(ctx); err != nil {
+			log.Printf("failed to process patch policy enforcement work: %v", err)
 		}
 		if err := m.processOnboardingWork(ctx); err != nil {
 			log.Printf("failed to process onboarding work: %v", err)
@@ -251,19 +262,20 @@ func (m *goSchedulerManager) acquireSchedulerLeadership(ctx context.Context, hol
 	if m == nil || m.store == nil || m.store.db == nil || strings.TrimSpace(holder) == "" {
 		return false, errors.New("scheduler leadership store unavailable")
 	}
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return false, err
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	executor := m.leaseTransport
+	if executor == nil {
+		executor = m.store.db
 	}
-	defer conn.Close()
-	result, err := conn.ExecContext(ctx, `
+	result, err := executor.ExecContext(ctx, `
 		INSERT INTO engine.cluster_application_leases(name,holder,expires_at,updated_at)
 		VALUES('scheduler-leader',$1,$2,$3)
 		ON CONFLICT(name) DO UPDATE
 		SET holder=EXCLUDED.holder,expires_at=EXCLUDED.expires_at,updated_at=EXCLUDED.updated_at
 		WHERE engine.cluster_application_leases.holder=EXCLUDED.holder
 		   OR engine.cluster_application_leases.expires_at < EXCLUDED.updated_at
-	`, holder, now+10, now)
+	`, holder, now+20, now)
 	if err != nil {
 		return false, err
 	}
@@ -823,37 +835,32 @@ func (m *goSchedulerManager) enqueueWorkItem(ctx context.Context, kind string, p
 }
 
 func (m *goSchedulerManager) processGlobalScheduledWork(ctx context.Context) error {
-	item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindScheduledWorkflowRun}, "job-scheduler", 300)
+	item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindScheduledWorkflowRun})
 	if err != nil || item == nil {
 		return err
 	}
-	status := workStatusSucceeded
-	errorText := ""
-	if err := m.runGlobalWorkItem(ctx, *item); err != nil {
-		status = workStatusFailed
-		errorText = err.Error()
-	}
-	if err := m.completeWorkItem(ctx, item.ID, status, errorText); err != nil {
-		return err
-	}
-	return nil
+	return m.runClaimedWork(ctx, *item, m.runGlobalWorkItem)
 }
 
 func (m *goSchedulerManager) runGlobalWorkItem(ctx context.Context, item schedulerWorkItem) error {
+	if acknowledged, err := m.resumeSchedulerExecution(ctx); err != nil || acknowledged {
+		return err
+	}
 	switch item.Kind {
 	case schedulerKindScheduledWorkflowRun:
 		component := schedulerAnyMap(item.Payload["workflow_component"])
 		workflowGUID := assemblyCoerceGUID(firstNonEmptyAny(component["assembly_guid"], component["assemblyGuid"], component["workflow_guid"], component["workflowGuid"]))
 		if workflowGUID == "" {
-			return m.markScheduledRunFailed(ctx, nullInt(item.RunID), time.Now().Unix(), "Workflow GUID is required.")
+			return m.failScheduledRun(ctx, nullInt(item.RunID), "Workflow GUID is required.")
 		}
 		sourceMetadata := map[string]any{
-			"scheduled_job_id":      nullInt(item.JobID),
-			"scheduled_job_run_id":  nullInt(item.RunID),
-			"scheduled_ts":          coerceInt64(item.Payload["scheduled_ts"]),
-			"component_name":        scheduledComponentDisplayName(component, "Workflow"),
-			"workflow_site_scope":   schedulerAnyMap(item.Payload["workflow_site_scope"]),
-			"workflow_component_id": firstNonEmptyAny(component["id"], component["component_id"]),
+			"scheduled_job_id":       nullInt(item.JobID),
+			"scheduled_job_run_id":   nullInt(item.RunID),
+			"scheduled_ts":           coerceInt64(item.Payload["scheduled_ts"]),
+			"component_name":         scheduledComponentDisplayName(component, "Workflow"),
+			"workflow_site_scope":    schedulerAnyMap(item.Payload["workflow_site_scope"]),
+			"workflow_component_id":  firstNonEmptyAny(component["id"], component["component_id"]),
+			"scheduler_execution_id": fmt.Sprintf("work:%d:%s", item.ID, schedulerExecutionKey(ctx)),
 		}
 		body := map[string]any{
 			"workflow_guid":    workflowGUID,
@@ -864,10 +871,16 @@ func (m *goSchedulerManager) runGlobalWorkItem(ctx context.Context, item schedul
 			"runner_role":      "Admin",
 			"scheduled_job_id": nullInt(item.JobID),
 		}
-		_, err := m.internalJSON(ctx, http.MethodPost, "/api/internal/job-scheduler/workflow/start", body, 30*time.Second)
-		return err
+		if err := m.beginSchedulerDispatch(ctx, fmt.Sprintf("scheduled-run:%d", nullInt(item.RunID))); err != nil {
+			return err
+		}
+		response, err := m.internalJSON(ctx, http.MethodPost, "/api/internal/job-scheduler/workflow/start", body, 30*time.Second)
+		if err != nil {
+			return err
+		}
+		return m.acknowledgeSchedulerDispatch(ctx, cleanText(response["run_id"]))
 	case schedulerKindScheduledRun:
-		return m.markScheduledRunFailed(ctx, nullInt(item.RunID), time.Now().Unix(), "No site worker is available for unassigned scheduled run.")
+		return m.failScheduledRun(ctx, nullInt(item.RunID), "No site worker is available for unassigned scheduled run.")
 	default:
 		return fmt.Errorf("unsupported global work kind %s", item.Kind)
 	}
@@ -877,29 +890,20 @@ func (m *goSchedulerManager) processAgentMaintenanceWork(ctx context.Context) er
 	if err := m.expireTimedOutAgentMaintenanceRuns(ctx); err != nil {
 		return err
 	}
-	leaseSeconds := int64(schedulerAgentMaintenanceSocketWaitSeconds() + 120)
 	for i := 0; i < envInt("BOREALIS_AGENT_MAINTENANCE_MANAGER_BATCH", 4, 1, 32); i++ {
-		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindAgentMaintenanceRun}, "job-scheduler", leaseSeconds)
+		item, err := m.claimNextKindWorkItem(ctx, []string{schedulerKindAgentMaintenanceRun})
 		if err != nil || item == nil {
 			return err
 		}
-		claimed := *item
-		go func() {
-			status := workStatusSucceeded
-			errorText := ""
-			if err := m.runAgentMaintenanceWorkItem(ctx, claimed); err != nil {
-				status = workStatusFailed
-				errorText = err.Error()
-			}
-			if err := m.completeWorkItem(ctx, claimed.ID, status, errorText); err != nil {
-				log.Printf("failed to complete agent maintenance work item id=%d: %v", claimed.ID, err)
-			}
-		}()
+		m.startClaimedWork(ctx, *item, m.runAgentMaintenanceWorkItem)
 	}
 	return nil
 }
 
 func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, item schedulerWorkItem) error {
+	if acknowledged, err := m.resumeSchedulerExecution(ctx); err != nil || acknowledged {
+		return err
+	}
 	payload := item.Payload
 	runID := firstPositiveInt64(coerceInt64(payload["run_id"]), nullInt(item.RunID))
 	hostname := cleanText(payload["hostname"])
@@ -954,13 +958,14 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 				"timeout_seconds": callTimeout.Seconds(),
 				"payload":         eventPayload,
 			}
+			if err := m.beginSchedulerDispatch(ctx, operationID); err != nil {
+				return err
+			}
 			response, lastState, lastErr = m.callSiteWorkerHostService(ctx, snapshot.Route, body, callTimeout+2*time.Second)
-			if lastErr == nil {
+			if lastErr == nil || schedulerAgentRejectedResponse(response, lastState) {
 				break
 			}
-			if lastState == "agent_error" || lastState == "invalid_agent_response" {
-				break
-			}
+			return fmt.Errorf("%w: %s: %v", errSchedulerOutcomeUnknown, operationID, lastErr)
 		}
 		if time.Until(deadline) <= 0 {
 			break
@@ -973,6 +978,12 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	}
 	if lastErr != nil {
 		errorText := schedulerAgentMaintenanceError(hostname, lastState, lastErr)
+		if schedulerAgentRejectedResponse(response, lastState) {
+			if err := m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Failed", "", errorText); err != nil {
+				return err
+			}
+			return errors.New(errorText)
+		}
 		_ = m.updateAgentMaintenanceRunStatus(ctx, runID, "Failed", "", errorText)
 		return errors.New(errorText)
 	}
@@ -989,9 +1000,41 @@ func (m *goSchedulerManager) runAgentMaintenanceWorkItem(ctx context.Context, it
 	if responseStatus == "active" {
 		activeOperationID := cleanText(response["operation_id"])
 		stdout += fmt.Sprintf("Request coalesced with active operation_id=%s.\n", firstText(activeOperationID, "unknown"))
-		return m.updateAgentMaintenanceRunStatus(ctx, runID, "Skipped", stdout, "")
+		return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Skipped", stdout, "")
 	}
-	return m.updateAgentMaintenanceRunStatus(ctx, runID, "Running", stdout, "")
+	return m.finishAgentMaintenanceDispatch(ctx, operationID, runID, "Running", stdout, "")
+}
+
+func (m *goSchedulerManager) finishAgentMaintenanceDispatch(ctx context.Context, operationID string, runID int64, status, stdout, stderr string) error {
+	tx, item, cleanup, err := m.beginOwnedWorkTx(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	record, err := loadSchedulerExecution(ctx, tx, item)
+	if err != nil {
+		return err
+	}
+	if item.Kind != schedulerKindAgentMaintenanceRun || !item.RunID.Valid || item.RunID.Int64 != runID ||
+		record.ResultID != operationID || !stringInSet(status, "Running", "Skipped", "Failed") {
+		return errors.New("maintenance response does not match owned execution")
+	}
+	var currentStatus string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM engine.scheduled_job_runs WHERE id=$1 FOR UPDATE`, runID).Scan(&currentStatus); err != nil {
+		return err
+	}
+	if err := acknowledgeSchedulerDispatchTx(ctx, tx, item, operationID); err != nil {
+		return err
+	}
+	// An asynchronous completion may beat the acceptance response. Its actual
+	// terminal result already exists; acknowledgement must not reset it to Running.
+	if status == "Running" && scheduledTerminalStatus(currentStatus) {
+		return tx.Commit()
+	}
+	if err := updateAgentMaintenanceRunStatusTx(ctx, tx, runID, status, stdout, stderr); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) expireTimedOutAgentMaintenanceRuns(ctx context.Context) error {
@@ -1102,6 +1145,12 @@ func schedulerAgentMaintenanceError(hostname string, state string, err error) st
 	}
 }
 
+// Only an actual Agent response proves rejection. A worker/HTTP error carrying
+// the same state label without that response leaves dispatch outcome unknown.
+func schedulerAgentRejectedResponse(response map[string]any, state string) bool {
+	return state == "agent_error" && strings.EqualFold(cleanText(response["status"]), "error")
+}
+
 func (m *goSchedulerManager) callSiteWorkerHostService(ctx context.Context, route *agentWorkerRoute, body map[string]any, timeout time.Duration) (map[string]any, string, error) {
 	target := workerInternalURL(route, "/remote-ops/host-service/call")
 	if target == "" {
@@ -1162,22 +1211,24 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 	if runID <= 0 {
 		return nil
 	}
-	conn, err := m.store.db.Conn(ctx)
+	tx, _, cleanup, err := m.beginOwnedWorkTx(ctx)
 	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
+		return err
 	}
-	defer conn.Close()
+	defer cleanup()
+	if err := updateAgentMaintenanceRunStatusTx(ctx, tx, runID, status, stdout, stderr); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+func updateAgentMaintenanceRunStatusTx(ctx context.Context, tx *sql.Tx, runID int64, status, stdout, stderr string) error {
 	now := time.Now().Unix()
 	var finished any
 	if stringInSet(status, "Success", "Failed", "Timed Out", "Skipped") {
 		finished = now
 	}
 	errorText := truncateString(stderr, 512)
-	tx, err := conn.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollbackQuietly(tx)
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.scheduled_job_runs
 		   SET status=$1, updated_at=$2, finished_ts=COALESCE($3, finished_ts), error=$4
@@ -1197,7 +1248,7 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 		return err
 	}
 	var activityID sql.NullInt64
-	err = tx.QueryRowContext(ctx, `
+	err := tx.QueryRowContext(ctx, `
 		SELECT activity_id
 		  FROM engine.scheduled_job_run_activity
 		 WHERE run_id=$1
@@ -1220,21 +1271,26 @@ func (m *goSchedulerManager) updateAgentMaintenanceRunStatus(ctx context.Context
 			return err
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 
 func (m *goSchedulerManager) processServiceAction(ctx context.Context) error {
-	item, err := m.claimNextWorkItem(ctx, 0, []string{schedulerLaneServiceAction}, "job-scheduler", 300)
+	item, err := m.claimNextWorkItem(ctx, 0, []string{schedulerLaneServiceAction})
 	if err != nil || item == nil {
 		return err
 	}
-	status := workStatusSucceeded
-	errorText := ""
-	if err := m.runServiceAction(ctx, item.Payload); err != nil {
-		status = workStatusFailed
-		errorText = err.Error()
-	}
-	return m.completeWorkItem(ctx, item.ID, status, errorText)
+	return m.runClaimedWork(ctx, *item, func(workCtx context.Context, claimed schedulerWorkItem) error {
+		if acknowledged, err := m.resumeSchedulerExecution(workCtx); err != nil || acknowledged {
+			return err
+		}
+		if err := m.beginSchedulerDispatch(workCtx, fmt.Sprintf("service-action:%d", claimed.ID)); err != nil {
+			return err
+		}
+		if err := m.runServiceAction(workCtx, claimed.Payload); err != nil {
+			return err
+		}
+		return m.acknowledgeSchedulerDispatch(workCtx, "")
+	})
 }
 
 func (m *goSchedulerManager) runServiceAction(ctx context.Context, payload map[string]any) error {
@@ -1306,11 +1362,13 @@ func (m *goSchedulerManager) runSiteWorkerRecreate(ctx context.Context, action m
 	return nil
 }
 
-func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64, lanes []string, leaseOwner string, leaseSeconds int64) (*schedulerWorkItem, error) {
+func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64, lanes []string) (*schedulerWorkItem, error) {
 	if len(lanes) == 0 {
 		return nil, nil
 	}
-	conn, err := m.store.db.Conn(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
@@ -1320,6 +1378,10 @@ func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64
 		return nil, err
 	}
 	defer rollbackQuietly(tx)
+	leaseOwner, err := requireSchedulerLeadership(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
@@ -1351,11 +1413,12 @@ func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64
 		}
 		return nil, nil
 	}
-	lease := now + maxInt64(leaseSeconds, 30)
+	lease := now + schedulerWorkLeaseSeconds
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.job_scheduler_work_items
 		   SET status=$1, lease_owner=$2, lease_expires_at=$3, heartbeat_at=$4,
 		       worker_guid=$5, container_name=NULL, attempt_count=attempt_count+1,
+		       payload_json=jsonb_set(payload_json::jsonb,'{ownership_version}','1'::jsonb,true)::text,
 		       started_at=COALESCE(started_at, $6), updated_at=$7
 		 WHERE id=$8
 	`, workStatusRunning, leaseOwner, lease, now, leaseOwner, now, now, workID); err != nil {
@@ -1371,6 +1434,7 @@ func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64
 	if err != nil {
 		return nil, err
 	}
+	item.LeaseOwner = leaseOwner
 	item.Payload = schedulerJSONMap(payloadRaw)
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -1378,7 +1442,7 @@ func (m *goSchedulerManager) claimNextWorkItem(ctx context.Context, siteID int64
 	return &item, nil
 }
 
-func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []string, leaseOwner string, leaseSeconds int64) (*schedulerWorkItem, error) {
+func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []string) (*schedulerWorkItem, error) {
 	normalizedKinds := []string{}
 	for _, kind := range kinds {
 		if cleaned := strings.TrimSpace(kind); cleaned != "" {
@@ -1388,7 +1452,9 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 	if len(normalizedKinds) == 0 {
 		return nil, nil
 	}
-	conn, err := m.store.db.Conn(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
 		return nil, errors.Join(errOperatorStoreDown, err)
 	}
@@ -1398,6 +1464,10 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 		return nil, err
 	}
 	defer rollbackQuietly(tx)
+	leaseOwner, err := requireSchedulerLeadership(ctx, tx)
+	if err != nil {
+		return nil, err
+	}
 	now := time.Now().Unix()
 	rows, err := tx.QueryContext(ctx, `
 		SELECT id
@@ -1428,11 +1498,12 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 		}
 		return nil, nil
 	}
-	lease := now + maxInt64(leaseSeconds, 30)
+	lease := now + schedulerWorkLeaseSeconds
 	if _, err := tx.ExecContext(ctx, `
 		UPDATE engine.job_scheduler_work_items
 		   SET status=$1, lease_owner=$2, lease_expires_at=$3, heartbeat_at=$4,
 		       worker_guid=$5, container_name=NULL, attempt_count=attempt_count+1,
+		       payload_json=jsonb_set(payload_json::jsonb,'{ownership_version}','1'::jsonb,true)::text,
 		       started_at=COALESCE(started_at, $6), updated_at=$7
 		 WHERE id=$8
 	`, workStatusRunning, leaseOwner, lease, now, leaseOwner, now, now, workID); err != nil {
@@ -1448,6 +1519,7 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 	if err != nil {
 		return nil, err
 	}
+	item.LeaseOwner = leaseOwner
 	item.Payload = schedulerJSONMap(payloadRaw)
 	if err := tx.Commit(); err != nil {
 		return nil, err
@@ -1455,42 +1527,44 @@ func (m *goSchedulerManager) claimNextKindWorkItem(ctx context.Context, kinds []
 	return &item, nil
 }
 
-func (m *goSchedulerManager) completeWorkItem(ctx context.Context, workID int64, status string, errorText string) error {
-	normalized := status
-	if !stringInSet(normalized, workStatusSucceeded, workStatusFailed, workStatusCancelled) {
-		normalized = workStatusFailed
-	}
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	now := time.Now().Unix()
-	_, err = conn.ExecContext(ctx, `
-		UPDATE engine.job_scheduler_work_items
-		   SET status=$1, lease_expires_at=NULL, heartbeat_at=$2, error=$3,
-		       finished_at=$4, updated_at=$5
-		 WHERE id=$6
-	`, normalized, now, truncateString(errorText, 2000), now, now, workID)
-	return err
-}
-
 func (m *goSchedulerManager) expireStaleLeases(ctx context.Context) error {
-	conn, err := m.store.db.Conn(ctx)
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	conn, err := m.ownershipPool().Conn(ctx)
 	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
+		return err
 	}
 	defer conn.Close()
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	holder, err := requireSchedulerLeadership(ctx, tx)
+	if err != nil {
+		return err
+	}
 	now := time.Now().Unix()
-	_, err = conn.ExecContext(ctx, `
-		UPDATE engine.job_scheduler_work_items
-		   SET status=$1, lease_owner=NULL, lease_expires_at=NULL, heartbeat_at=NULL,
-		       worker_guid=NULL, container_name=NULL, error=$2, available_at=$3, updated_at=$4
-		 WHERE status=$5
-		   AND lease_expires_at IS NOT NULL
-		   AND lease_expires_at < $6
-	`, workStatusQueued, "requeued after work lease expired", now, now, workStatusRunning, now)
-	return err
+	// A new leadership incarnation can reclaim the former owner's claims
+	// immediately. Instrumented executions retain their ledger across claims;
+	// legacy running work has no proof of whether dispatch already happened.
+	if _, err := tx.ExecContext(ctx, `WITH recovered AS (
+		UPDATE engine.job_scheduler_work_items SET
+		status=CASE WHEN payload_json::jsonb->>'ownership_version'='1' THEN $1 ELSE $2 END,
+		lease_owner=NULL,lease_expires_at=NULL,heartbeat_at=NULL,worker_guid=NULL,container_name=NULL,
+		error=CASE WHEN payload_json::jsonb->>'ownership_version'='1' THEN 'reconciling work after ownership loss' ELSE $3 END,
+		available_at=$4,updated_at=$4,
+		finished_at=CASE WHEN payload_json::jsonb->>'ownership_version'='1' THEN NULL ELSE $4 END,
+		payload_json=CASE WHEN payload_json::jsonb->>'ownership_version'='1' THEN payload_json
+		ELSE jsonb_set(payload_json::jsonb,'{recovery_state}','"outcome_unknown"'::jsonb,true)::text END
+		WHERE status=$5 AND (lease_expires_at < $4 OR lease_owner IS DISTINCT FROM $6)
+		RETURNING run_id,status
+	) UPDATE engine.scheduled_job_runs SET error=$3,updated_at=$4
+	WHERE id IN (SELECT run_id FROM recovered WHERE status=$2)`, workStatusQueued, workStatusFailed,
+		errSchedulerOutcomeUnknown.Error()+": legacy running claim has no dispatch evidence", now, workStatusRunning, holder); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (m *goSchedulerManager) markLostWorkers(ctx context.Context) error {
@@ -1530,34 +1604,7 @@ func (m *goSchedulerManager) markLostWorkers(ctx context.Context) error {
 }
 
 func (m *goSchedulerManager) pruneWorkerHistory(ctx context.Context, retentionSeconds int) error {
-	conn, err := m.store.db.Conn(ctx)
-	if err != nil {
-		return errors.Join(errOperatorStoreDown, err)
-	}
-	defer conn.Close()
-	cutoff := time.Now().Unix() - int64(retentionSeconds)
-	_, err = conn.ExecContext(ctx, `
-		DELETE FROM engine.job_scheduler_workers
-		 WHERE status IN ($1,$2)
-		   AND COALESCE(stopped_at, updated_at, last_seen_at) < $3
-	`, schedulerWorkerStatusStopped, schedulerWorkerStatusLost, cutoff)
-	if err != nil {
-		return err
-	}
-	routeFiles, err := schedulerRouteFilesForTerminalRoutes(ctx, conn, cutoff)
-	if err != nil {
-		return err
-	}
-	_, err = conn.ExecContext(ctx, `
-		DELETE FROM engine.job_scheduler_worker_routes
-		 WHERE status IN ($1,$2)
-		   AND COALESCE(retired_at, updated_at, created_at) < $3
-	`, schedulerRouteStatusRetired, schedulerRouteStatusLost, cutoff)
-	if err != nil {
-		return err
-	}
-	schedulerRemoveRouteFiles(routeFiles)
-	return nil
+	return m.pruneWorkerAdmissionHistory(ctx, retentionSeconds)
 }
 
 func (m *goSchedulerManager) siteIDsNeedingWorkers(ctx context.Context) ([]int64, error) {
@@ -1635,7 +1682,7 @@ func (m *goSchedulerManager) spawnSiteWorker(ctx context.Context, siteID int64) 
 	workerGUID = schedulerK3sSiteWorkerGUID(siteID)
 	remoteOpsPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
 	remoteDesktopPort := schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_DESKTOP_PORT_RANGE", schedulerDefaultRemoteDeskPortBase, schedulerDefaultRemoteDeskPortRange)
-	containerName := siteWorkerNameForSite(siteID, siteName, workerGUID)
+	containerName := siteWorkerPodNameForSite(siteID)
 	return m.spawnK3sSiteWorker(ctx, siteID, siteName, workerGUID, containerName, remoteOpsPort, remoteDesktopPort)
 }
 
@@ -1663,7 +1710,8 @@ func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int6
 		RemoteDesktopPort: remoteDesktopPort,
 	})
 	if err != nil {
-		_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+		// CREATE may have succeeded before its response was lost. Preserve this
+		// original Starting identity until fresh inventory and cleanup reconcile it.
 		return fmt.Errorf("failed to launch K3s %s: %w", containerName, err)
 	}
 	result := schedulerAnyMap(response["result"])
@@ -1673,7 +1721,7 @@ func (m *goSchedulerManager) spawnK3sSiteWorker(ctx context.Context, siteID int6
 	metadata := schedulerWorkerRouteMetadataForHost(workerGUID, host, remoteOpsPort, remoteDesktopPort, "borealis-operator")
 	if host != "" {
 		if err := m.upsertWorker(ctx, workerGUID, containerName, siteID, schedulerWorkerStatusStarting, []string{}, nil, remoteOpsPort, metadata); err != nil {
-			_, _ = client.retireSiteWorker(context.Background(), workerGUID, "scheduler_db_update_failed")
+			_, _ = client.retireSiteWorker(ctx, workerGUID, "scheduler_db_update_failed")
 			return err
 		}
 	}
@@ -1724,13 +1772,14 @@ func (m *goSchedulerManager) reconcileSiteWorkers(ctx context.Context) error {
 func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error {
 	client, err := m.operatorClient()
 	if err != nil {
-		log.Printf("site-worker K3s reconcile skipped: %v", err)
-		return nil
+		return err
 	}
 	snapshots, err := client.listSiteWorkers(ctx)
 	if err != nil {
-		log.Printf("site-worker K3s reconcile skipped: %v", err)
-		return nil
+		return err
+	}
+	if err := validateSchedulerWorkerInventory(snapshots); err != nil {
+		return err
 	}
 	desiredImage := schedulerDesiredSiteWorkerImage()
 	sort.SliceStable(snapshots, func(i, j int) bool {
@@ -1767,64 +1816,64 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		containerName := firstText(cleanText(snapshot["container_name"]), cleanText(snapshot["name"]), "site-worker-"+workerGUID)
 		expectedWorkerGUID := schedulerK3sSiteWorkerGUID(siteID)
 		if expectedWorkerGUID != "" && workerGUID != expectedWorkerGUID {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "stable_site_worker_guid_migration"); err != nil {
-				log.Printf("failed to retire K3s site-worker with legacy guid pod=%s worker_guid=%s expected_worker_guid=%s: %v", containerName, workerGUID, expectedWorkerGUID, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "stable_site_worker_guid_migration"); err != nil {
+				return fmt.Errorf("retire legacy site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired K3s site-worker with legacy guid pod=%s worker_guid=%s expected_worker_guid=%s", containerName, workerGUID, expectedWorkerGUID)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		if schedulerK3sSiteWorkerTerminal(snapshot) {
 			phase := cleanText(snapshot["kubernetes_phase"])
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "terminal_phase"); err != nil {
-				log.Printf("failed to retire terminal K3s site-worker pod=%s worker_guid=%s phase=%s: %v", containerName, workerGUID, phase, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "terminal_phase"); err != nil {
+				return fmt.Errorf("retire terminal site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired terminal K3s site-worker pod=%s worker_guid=%s phase=%s", containerName, workerGUID, phase)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		if !schedulerSiteWorkerImageMatches(snapshot, desiredImage) {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "stale_image"); err != nil {
-				log.Printf("failed to retire stale K3s site-worker pod=%s worker_guid=%s: %v", containerName, workerGUID, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "stale_image"); err != nil {
+				return fmt.Errorf("retire stale site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired stale K3s site-worker pod=%s worker_guid=%s image=%s desired=%s", containerName, workerGUID, cleanText(snapshot["configured_image"]), desiredImage)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		serviceHost, clusterIPMigrationReason := schedulerK3sSiteWorkerServiceHost(snapshot)
 		if clusterIPMigrationReason == "cluster_ip_route_migration" {
-			networkMode := strings.ToLower(cleanText(snapshot["network_mode"]))
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "cluster_ip_route_migration"); err != nil {
-				log.Printf("failed to retire host-loopback K3s site-worker pod=%s worker_guid=%s network_mode=%s: %v", containerName, workerGUID, networkMode, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "cluster_ip_route_migration"); err != nil {
+				return fmt.Errorf("retire host-loopback site-worker %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired host-loopback K3s site-worker pod=%s worker_guid=%s for ClusterIP route migration", containerName, workerGUID)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
+			}
 			continue
 		}
 		if clusterIPMigrationReason == "cluster_ip_service_missing" {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "cluster_ip_service_missing"); err != nil {
-				log.Printf("failed to retire K3s site-worker missing ClusterIP service pod=%s worker_guid=%s: %v", containerName, workerGUID, err)
+			if err := retireSchedulerSiteWorker(ctx, client, siteID, workerGUID, "cluster_ip_service_missing"); err != nil {
+				return fmt.Errorf("retire site-worker missing service %s: %w", workerGUID, err)
 			} else {
 				log.Printf("retired K3s site-worker missing ClusterIP service pod=%s worker_guid=%s", containerName, workerGUID)
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
-			continue
-		}
-		if existing := liveSites[siteID]; existing != "" {
-			if _, err := client.retireSiteWorker(ctx, workerGUID, "duplicate_site"); err != nil {
-				log.Printf("failed to retire duplicate K3s site-worker pod=%s worker_guid=%s site_id=%d: %v", containerName, workerGUID, siteID, err)
-			} else {
-				log.Printf("retired duplicate K3s site-worker pod=%s worker_guid=%s site_id=%d kept_worker_guid=%s", containerName, workerGUID, siteID, existing)
+			if err := m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost); err != nil {
+				return err
 			}
-			_ = m.stopWorker(ctx, workerGUID, schedulerWorkerStatusLost)
 			continue
 		}
-		liveSites[siteID] = workerGUID
 		live = append(live, workerGUID)
+		liveSites[siteID] = workerGUID
 		remoteOpsPort := coerceInt64(snapshot["remote_ops_port"])
 		if remoteOpsPort <= 0 {
 			remoteOpsPort = schedulerWorkerPort(workerGUID, siteID, "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_BASE", "BOREALIS_SITE_WORKER_REMOTE_OPS_PORT_RANGE", schedulerDefaultRemoteOpsPortBase, schedulerDefaultRemoteOpsPortRange)
@@ -1838,6 +1887,7 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 			status = schedulerWorkerStatusRunning
 		}
 		metadata := schedulerWorkerRouteMetadataForHost(workerGUID, serviceHost, remoteOpsPort, remoteDesktopPort, "borealis-operator")
+		metadata[schedulerWorkerPlacementKey] = schedulerWorkerPlacement(snapshot)
 		upstreamPort := int64(0)
 		if serviceHost != "" {
 			upstreamPort = remoteOpsPort
@@ -1848,6 +1898,9 @@ func (m *goSchedulerManager) reconcileK3sSiteWorkers(ctx context.Context) error 
 		if err := m.updateWorkerDockerState(ctx, workerGUID, cleanText(snapshot["kubernetes_phase"]), coerceInt64Ptr(snapshot["exit_code"])); err != nil {
 			return err
 		}
+	}
+	if err := m.retireMissingSchedulerWorkers(ctx, client, live, liveSites); err != nil {
+		return err
 	}
 	if err := m.markMissingWorkersLost(ctx, live); err != nil {
 		return err
@@ -1860,7 +1913,6 @@ func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, conta
 	if err != nil {
 		return errors.Join(errOperatorStoreDown, err)
 	}
-	defer conn.Close()
 	now := time.Now().Unix()
 	lanesJSON := mustJSON(lanes)
 	linksJSON := mustJSON(taskLinks)
@@ -1878,8 +1930,9 @@ func (m *goSchedulerManager) upsertWorker(ctx context.Context, workerGUID, conta
 			task_links_json=EXCLUDED.task_links_json,
 			updated_at=EXCLUDED.updated_at
 	`, workerGUID, containerName, siteID, status, now, now, lanesJSON, linksJSON, now, now)
-	if err != nil {
-		return err
+	closeErr := conn.Close()
+	if err != nil || closeErr != nil {
+		return errors.Join(err, closeErr)
 	}
 	if siteID > 0 && upstreamPort > 0 {
 		return m.upsertWorkerRoute(ctx, workerGUID, containerName, siteID, upstreamPort, routeMetadata)
@@ -1900,6 +1953,52 @@ func (m *goSchedulerManager) upsertWorkerRoute(ctx context.Context, workerGUID, 
 		return err
 	}
 	defer rollbackQuietly(tx)
+	// Lock the existing site cohort in one order before any same-site retirement.
+	locked, err := tx.QueryContext(ctx, `SELECT worker_guid FROM engine.job_scheduler_worker_routes WHERE site_id=$1 ORDER BY worker_guid FOR UPDATE`, siteID)
+	if err != nil {
+		return err
+	}
+	for locked.Next() {
+		var ignored string
+		if err := locked.Scan(&ignored); err != nil {
+			locked.Close()
+			return err
+		}
+	}
+	lockErr := locked.Err()
+	closeErr := locked.Close()
+	if lockErr != nil || closeErr != nil {
+		return errors.Join(lockErr, closeErr)
+	}
+	inserted, err := tx.ExecContext(ctx, `INSERT INTO engine.job_scheduler_worker_routes(
+		worker_guid,site_id,container_name,route_name,route_path_prefix,route_file_path,
+		upstream_scheme,upstream_host,upstream_port,status,generation,metadata_json,created_at,updated_at)
+		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,'{}',$11,$11) ON CONFLICT(worker_guid) DO NOTHING`,
+		route.WorkerGUID, route.SiteID, route.ContainerName, route.RouteName, route.RoutePath,
+		route.RouteFilePath, route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort, route.Status, now)
+	if err != nil {
+		return err
+	}
+	created, err := inserted.RowsAffected()
+	if err != nil {
+		return err
+	}
+	var previous, oldContainer, oldHost, oldStatus string
+	var generation, oldSite, oldPort int64
+	err = tx.QueryRowContext(ctx, `SELECT metadata_json,generation,container_name,site_id,upstream_host,upstream_port,status
+		FROM engine.job_scheduler_worker_routes WHERE worker_guid=$1 FOR UPDATE`, workerGUID).
+		Scan(&previous, &generation, &oldContainer, &oldSite, &oldHost, &oldPort, &oldStatus)
+	if err != nil {
+		return err
+	}
+	if created == 1 {
+		generation = 0
+	}
+	changed := oldContainer != route.ContainerName || oldSite != route.SiteID || oldHost != route.UpstreamHost || oldPort != route.UpstreamPort || oldStatus != route.Status
+	route.Metadata, generation, err = schedulerMergeAdmissionMetadata(previous, route.Metadata, generation, changed)
+	if err != nil {
+		return err
+	}
 	retiredFiles := []string{}
 	rows, err := tx.QueryContext(ctx, `
 		SELECT route_file_path
@@ -1938,7 +2037,7 @@ func (m *goSchedulerManager) upsertWorkerRoute(ctx context.Context, workerGUID, 
 			worker_guid, site_id, container_name, route_name, route_path_prefix,
 			route_file_path, upstream_scheme, upstream_host, upstream_port,
 			status, generation, metadata_json, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,1,$11,$12,$13)
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$14,$11,$12,$13)
 		ON CONFLICT (worker_guid) DO UPDATE SET
 			site_id=EXCLUDED.site_id,
 			container_name=EXCLUDED.container_name,
@@ -1950,11 +2049,15 @@ func (m *goSchedulerManager) upsertWorkerRoute(ctx context.Context, workerGUID, 
 			upstream_port=EXCLUDED.upstream_port,
 			status=EXCLUDED.status,
 			metadata_json=EXCLUDED.metadata_json,
+			generation=EXCLUDED.generation,
 			updated_at=EXCLUDED.updated_at
-	`, route.WorkerGUID, route.SiteID, route.ContainerName, route.RouteName, route.RoutePath, route.RouteFilePath, route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort, route.Status, mustJSON(route.Metadata), now, now); err != nil {
+	`, route.WorkerGUID, route.SiteID, route.ContainerName, route.RouteName, route.RoutePath, route.RouteFilePath, route.UpstreamScheme, route.UpstreamHost, route.UpstreamPort, route.Status, mustJSON(route.Metadata), now, now, generation); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
+		return err
+	}
+	if err := conn.Close(); err != nil {
 		return err
 	}
 	schedulerRemoveRouteFiles(retiredFiles)

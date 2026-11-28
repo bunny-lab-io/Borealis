@@ -147,6 +147,7 @@ func (s *postgresOperatorStore) ensureClusterSchema(ctx context.Context) error {
 			PRIMARY KEY (release_sha, phase)
 		)`,
 	}
+	statements = append(statements, clusterSSHSchemaStatements...)
 	conn, err := s.db.Conn(ctx)
 	if err != nil {
 		return errors.Join(errClusterUnavailable, err)
@@ -553,8 +554,20 @@ func (s *postgresOperatorStore) createClusterOperation(ctx context.Context, acto
 		}
 		compatibility := clusterCompatibilityMap(mutation.Payload["compatibility"])
 		releaseChannel := firstText(cleanText(mutation.Payload["release_channel"]), clusterReleaseChannel(mutation.TargetRelease))
-		if releaseChannel != clusterReleaseChannel(mutation.TargetRelease) || !textInSet(releaseChannel, "stable", "qualification") {
+		if releaseChannel != clusterReleaseChannel(mutation.TargetRelease) || !textInSet(releaseChannel, "stable", "qualification", "development") {
 			return nil, fmt.Errorf("%w: Engine update release channel does not match target tag", errClusterConflict)
+		}
+		if releaseChannel == "development" {
+			floor := clusterReleaseBase(baselineRelease)
+			if floor == "" {
+				floor = cleanText(parseClusterJSON(configJSON)["development_version_floor"])
+			}
+			if floor == "" || cleanText(mutation.Payload["development_version_floor"]) != floor || cleanText(mutation.Payload["source_release"]) != baselineRelease || cleanText(mutation.Payload["source_sha"]) != baselineSHA {
+				return nil, fmt.Errorf("%w: development baseline changed", errClusterConflict)
+			}
+		}
+		if clusterSnapshotReleaseRE.MatchString(baselineRelease) && cleanText(mutation.Payload["scope"]) != "all" {
+			return nil, fmt.Errorf("%w: leaving development requires a whole-cluster update", errClusterConflict)
 		}
 		mutation.Payload["release_channel"] = releaseChannel
 		if sourceRelease := cleanText(mutation.Payload["source_release"]); sourceRelease != "" && sourceRelease != baselineRelease {
@@ -1003,7 +1016,12 @@ func (s *postgresOperatorStore) retryClusterOperation(ctx context.Context, actor
 }
 
 func (s *postgresOperatorStore) cancelClusterOperation(ctx context.Context, actor string, operationID string) (map[string]any, error) {
-	return s.transitionClusterOperation(ctx, actor, operationID, "cancel")
+	result, err := s.transitionClusterOperation(ctx, actor, operationID, "cancel")
+	if err == nil && (cleanText(result["kind"]) == "ssh_onboarding" || cleanText(result["kind"]) == clusterExistingIdentityKind) {
+		// transition has returned its pooled connection before credential cleanup.
+		err = s.cleanupClusterSSHCredentials(ctx)
+	}
+	return result, err
 }
 
 func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, actor string, operationID string, action string) (map[string]any, error) {
@@ -1033,6 +1051,15 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 	nextState, step, message := "", "", ""
 	retryResumeStep := ""
 	if action == "retry" {
+		if kind == "node_maintenance" && currentStep == clusterAutomaticRecoveryStep {
+			return nil, fmt.Errorf("%w: automatic recovery observation requires its own authority reconciliation", errClusterConflict)
+		}
+		if err := rejectClusterAutomaticRecoveryRetry(kind, payloadJSON); err != nil {
+			return nil, fmt.Errorf("%w: %v", errClusterConflict, err)
+		}
+		if kind == "ssh_onboarding" || kind == clusterExistingIdentityKind {
+			return nil, fmt.Errorf("%w: SSH retry requires explicit credential resubmission and target reconciliation", errClusterConflict)
+		}
 		if kind == "hmr_start" {
 			return nil, errClusterHMREntryDisabled
 		}
@@ -1107,11 +1134,64 @@ func (s *postgresOperatorStore) transitionClusterOperation(ctx context.Context, 
 			return nil, fmt.Errorf("%w: another cluster operation is active", errClusterConflict)
 		}
 	} else {
+		if kind == clusterExistingIdentityKind {
+			if state != "waiting" || (currentStep != clusterExistingIdentityReserved && currentStep != clusterExistingIdentityConfirmed) {
+				return nil, fmt.Errorf("%w: identity recovery cancellation requires untouched reservation", errClusterConflict)
+			}
+			if currentStep == clusterExistingIdentityConfirmed && cancelClusterExistingIdentityConfirmation(ctx, tx, operationID) != nil {
+				return nil, errClusterConflict
+			}
+		}
 		if kind == "membership_admit" {
 			return nil, fmt.Errorf("%w: approved admission may already have joined; retry recovery instead of cancelling membership", errClusterConflict)
 		}
-		if state != "queued" && state != "waiting" {
+		if state != "queued" && state != "waiting" && !(kind == "ssh_onboarding" && state == "running") {
 			return nil, fmt.Errorf("%w: running or completed operation cannot be cancelled", errClusterConflict)
+		}
+		if kind == "ssh_onboarding" {
+			if q, e := pairReport(payloadJSON); e == nil && q.Ready && state == "running" && currentStep == clusterSSHPreparationOperationStep {
+				var entered, completed bool
+				if err := tx.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM engine.cluster_operation_events WHERE operation_id=$1 AND event_type=$2), (payload_json::jsonb ? 'ssh_preparation')
+                    FROM engine.cluster_operations WHERE id=$1`, operationID, sshPreparationAllocated).Scan(&entered, &completed); err != nil {
+					return nil, err
+				}
+				if completed {
+					return nil, errClusterConflict
+				}
+				if entered {
+					// Keep the operation and both targets in custody. Cancellation
+					// revokes every new grant, including a queued recovery pass.
+					const message = clusterSSHPairStopReason
+					res, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET error_text=$2,updated_at=$3 WHERE id=$1 AND coalesce(error_text,'')<>$2`, operationID, message, now)
+					if err != nil {
+						return nil, err
+					}
+					n, err := res.RowsAffected()
+					if err != nil {
+						return nil, err
+					}
+					if n == 1 {
+						if err = insertClusterEvent(ctx, tx, operationID, "", "", "ssh_pair_stop_requested", state, message, map[string]any{"attempt": attempt}, now); err != nil {
+							return nil, err
+						}
+						if err = insertClusterAudit(ctx, tx, actor, "operation_cancel", operationID, state, map[string]any{"kind": kind, "attempt": attempt}, now); err != nil {
+							return nil, err
+						}
+					}
+					if err = tx.Commit(); err != nil {
+						return nil, err
+					}
+					return map[string]any{"operation_id": operationID, "kind": kind, "state": state, "current_step": currentStep, "attempt": attempt, "stop_requested": true}, nil
+				}
+				if _, err := tx.ExecContext(ctx, `DELETE FROM engine.cluster_onboarding_credentials WHERE target_id IN (SELECT id FROM engine.cluster_onboarding_targets WHERE operation_id=$1)`, operationID); err != nil {
+					return nil, err
+				}
+				if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_onboarding_targets SET state='cancelled',credential_state='required',lease_holder='',lease_expires_at=0,lease_generation=lease_generation+1,updated_at=$2 WHERE operation_id=$1`, operationID, now); err != nil {
+					return nil, err
+				}
+			} else if err := cancelClusterSSHInspectionTargets(ctx, tx, operationID, currentStep); err != nil {
+				return nil, err
+			}
 		}
 		nextState, step, message = "cancelled", "cancelled", "Cluster operation cancelled at safe boundary."
 		if _, err := tx.ExecContext(ctx, `UPDATE engine.cluster_operations SET state=$1, current_step=$2, finished_at=$3, updated_at=$3 WHERE id=$4`, nextState, step, now, operationID); err != nil {

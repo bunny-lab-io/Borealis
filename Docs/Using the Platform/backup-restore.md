@@ -128,6 +128,7 @@ Use `--network-mode local` for Internal-Only restore validation. After the clust
     - Clean K3s restore-target validation must use a fresh or disposable Engine because the restore path deletes allow-listed configuration/trust tables before importing rows.
     - Restore rejects malformed backups, wrong ciphers, unsupported table IDs, unsupported file IDs, and target columns not present in the running Engine schema.
     - Restore deletes allow-listed configuration/trust tables plus runtime/history-adjacent tables, imports backup rows, resets serial sequences where applicable, replaces allow-listed key/config files, clears mounted Engine service log roots on a best-effort basis, clears pending device approvals and saved views, clears the in-memory Aegis key, clears operator cookies, and asks `borealis-operator` to run the post-restore runtime refresh.
+    - The installer creates Traefik’s ACME store at mode `0600` with the Engine runtime owner before the first edge pod starts. Redeployment preserves the existing ACME contents. The API uses this file when exporting the encrypted backup.
     - The post-restore runtime refresh retires existing site-worker pods, then restarts `api-backend`, `wireguard-tunnel`, `traefik-edge`, and `job-scheduler` so restored auth keys, Engine secret material, WireGuard state, and Traefik TLS state are loaded before agents reconnect. If `borealis-operator` is unavailable, restore returns `restart_required: true` and operators should run the documented deploy command.
     - WebUI restore waits through the expected API outage by polling `/api/bootstrap/state`. It requires a minimum refresh window plus two stable API responses before navigation so operators do not land on Aegis unlock or login while pods are still restarting.
 
@@ -138,6 +139,7 @@ Use `--network-mode local` for Internal-Only restore validation. After the clust
     - Users, roles, MFA/passkey data, credentials, GitHub token, Aegis state, assemblies, workflows, workflow webhooks, scheduled job definitions, watchdog definitions, device filters, patch policies, patch allow/block rules, patch targets/exclusions, patch catalog cache, metadata definitions/values, and current software and patch inventory.
 
     ### Excluded state
+    - Temporary cluster SSH/sudo provisioning credentials and target-worker state. Their tables are outside the configuration backup allowlist. Restore's Aegis-state deletion also removes active provisioning credentials through a foreign key cascade, even when the restored Aegis generation matches. Retained cluster target evidence requires reconciliation and credential resubmission before further remote work; it is not replay authorization.
     - Engine logs and rotated logs.
     - Engine service log files are removed from mounted log roots during restore so the restored Engine starts from a clean log surface after restart.
     - Saved views.

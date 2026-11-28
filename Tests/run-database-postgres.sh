@@ -8,11 +8,24 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=Tests/lib.sh
 source "${SCRIPT_DIR}/lib.sh"
 
-TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-1200}"
+TIMEOUT_SECONDS="${BOREALIS_DATABASE_TEST_TIMEOUT_SECONDS:-3600}"
 RESULT_DIR="$(result_dir_for database-postgres)"
 GO_BIN="$(resolve_go 1.25.12)"
 require_command python3
-TEST_PATTERN="$(BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" --run-pattern)"
+SHARD_ARGS=()
+RECEIPT_ARGS=()
+SCHEMA_ARGS=()
+# One shard owns the full Python contracts. Every database gets its own real schema.
+if [[ "${BOREALIS_POSTGRES_SHARD:-1}" != 1 ]]; then
+  SCHEMA_ARGS=(--initialize-only)
+fi
+if [[ -n "${BOREALIS_POSTGRES_SHARD:-}" ]]; then
+  SHARD_ARGS=(--shard "${BOREALIS_POSTGRES_SHARD}")
+  if [[ "${GITHUB_ACTIONS:-}" == true ]]; then
+    RECEIPT_ARGS=(--ci-receipt)
+  fi
+fi
+TEST_PATTERN="$(BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" "${SHARD_ARGS[@]}" --run-pattern)"
 CONTAINER_NAME="borealis-ci-postgres-${$}"
 POSTGRES_PASSWORD="borealis-ci-password"
 DOCKER=(docker)
@@ -81,17 +94,32 @@ if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_ENGINE_AUTH_TOKEN_ROOT="${RESULT_DIR}/runtime/secrets/Auth_Tokens" \
   PYTHONPATH="${REPO_ROOT}" \
   PYTHONDONTWRITEBYTECODE=1 \
-  "${PYTHON_BIN}" "${REPO_ROOT}/Tests/integration/database/test_postgres_integration.py" \
+  "${PYTHON_BIN}" "${REPO_ROOT}/Tests/integration/database/test_postgres_integration.py" "${SCHEMA_ARGS[@]}" \
   >"${RESULT_DIR}/postgres-integration.log" 2>&1; then
   "${DOCKER[@]}" logs "${CONTAINER_NAME}" >"${RESULT_DIR}/postgres-container.log" 2>&1 || true
   tail -n 160 "${RESULT_DIR}/postgres-integration.log" >&2 || true
   exit 1
 fi
 
+# Exercise the production Python admission transactions against the same
+# canonical schema. This entrypoint requires PostgreSQL and cannot skip SQL.
+if ((${#SCHEMA_ARGS[@]} == 0)) && ! run_timed "${TIMEOUT_SECONDS}" env \
+  BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
+  BOREALIS_PROJECT_ROOT="${REPO_ROOT}" \
+  BOREALIS_SITE_WORKER_ROUTE_FILE_WRITES=0 \
+  PYTHONPATH="${REPO_ROOT}" \
+  PYTHONDONTWRITEBYTECODE=1 \
+  "${PYTHON_BIN}" "${REPO_ROOT}/Data/Engine/Unit_Tests/test_worker_admission.py" --postgres \
+  >"${RESULT_DIR}/worker-admission-postgres.log" 2>&1; then
+  tail -n 160 "${RESULT_DIR}/worker-admission-postgres.log" >&2 || true
+  exit 1
+fi
+
+# Keep whole test families serial within each isolated database.
 if ! run_timed "${TIMEOUT_SECONDS}" env \
   BOREALIS_TEST_DATABASE_URL="${DATABASE_URL}?sslmode=disable" \
   GOWORK=off \
-  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json ./cmd/api-backend \
+  "${GO_BIN}" -C "${REPO_ROOT}/Data/Engine/Containers/api-backend" test -json -timeout=55m ./cmd/api-backend \
   -run "${TEST_PATTERN}" -count=1 \
   >"${RESULT_DIR}/postgres-go-results.jsonl" 2>"${RESULT_DIR}/postgres-go-stderr.log"; then
   tail -n 160 "${RESULT_DIR}/postgres-go-results.jsonl" "${RESULT_DIR}/postgres-go-stderr.log" >&2 || true
@@ -100,6 +128,6 @@ fi
 
 "${DOCKER[@]}" logs "${CONTAINER_NAME}" >"${RESULT_DIR}/postgres-container.log" 2>&1 || true
 BOREALIS_GO_BIN="${GO_BIN}" python3 "${SCRIPT_DIR}/policy/check_postgres_inventory.py" \
-  --results "${RESULT_DIR}/postgres-go-results.jsonl"
+  "${SHARD_ARGS[@]}" "${RECEIPT_ARGS[@]}" --results "${RESULT_DIR}/postgres-go-results.jsonl"
 
 printf 'PostgreSQL 17 integration passed. Results: %s\n' "${RESULT_DIR}"

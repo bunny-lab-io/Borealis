@@ -1,0 +1,2 @@
+  /usr/bin/bash r,
+  /opt/Borealis/Engine/Services/wireguard-tunnel/config/borealis-wg.conf r,

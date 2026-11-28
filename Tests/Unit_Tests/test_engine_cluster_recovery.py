@@ -31,6 +31,106 @@ class EngineClusterRecoveryTests(unittest.TestCase):
             check=False,
         )
 
+    def test_runtime_secret_publishes_sizing_without_pinning_standalone_installer(self):
+        with tempfile.TemporaryDirectory() as directory:
+            result = self.run_engine_library(r'''
+RUNTIME_ENV="$TEST_DIRECTORY/runtime.env"
+COMPOSE_ENV="$TEST_DIRECTORY/compose.env"
+for inputs in "16 35047" "24 65536 2 35047"; do
+  load_profile_tuning $inputs
+  printf 'PRESERVED=yes\n' > "$RUNTIME_ENV"
+  write_profile_environments
+  printf 'local=%s/%s\n' "$(read_env_value BOREALIS_CLUSTER_SIZING_RANK)" "$(read_env_value BOREALIS_CLUSTER_SIZING_MEMORY_MIB)"
+  borealis_runtime_env_secret_data "$RUNTIME_ENV"
+done
+''', extra_env={"TEST_DIRECTORY":directory})
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([s for s in result.stdout.splitlines() if s.startswith("local=")],
+                         ["local=/", "local=2/35047"])
+        for key, value in (("PRESERVED", "yes"), ("BOREALIS_CLUSTER_SIZING_RANK", "2"),
+                           ("BOREALIS_CLUSTER_SIZING_MEMORY_MIB", "35047")):
+            encoded = base64.b64encode(value.encode()).decode()
+            self.assertEqual(result.stdout.count(f'  {key}: "{encoded}"\n'), 2)
+
+    def test_cluster_sizing_preserves_source_tuning_on_larger_target(self):
+        def tuning(cpu, memory, rank="", reference=""):
+            result = self.run_engine_library(
+                r'''load_profile_tuning "$TEST_CPU" "$TEST_MEMORY" "$TEST_RANK" "$TEST_REFERENCE"
+for key in PROFILE_RANK PROFILE_NAME PROFILE_DB_POOL_SIZE PROFILE_SITE_WORKER_CONCURRENCY PROFILE_POSTGRES_SHARED_BUFFERS PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE PROFILE_POSTGRES_DB_MEMORY_LIMIT PROFILE_API_BACKEND_MEMORY_LIMIT PROFILE_SITE_WORKER_MEMORY_LIMIT PROFILE_CPU_RANK PROFILE_MEMORY_RANK PROFILE_HOST_VCPU PROFILE_HOST_MEMORY_MIB PROFILE_CLUSTER_SIZING_RANK PROFILE_CLUSTER_SIZING_MEMORY_MIB; do
+  printf '%s=%s\n' "$key" "${!key}"
+done
+''', extra_env={"TEST_CPU":str(cpu), "TEST_MEMORY":str(memory), "TEST_RANK":rank, "TEST_REFERENCE":reference})
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            return dict(line.split("=", 1) for line in result.stdout.splitlines())
+
+        for rank, cpu, memory in (("0", 16, 15989), ("1", 8, 24576), ("2", 16, 49152), ("3", 24, 98304)):
+            with self.subTest(rank=rank):
+                source = tuning(cpu, memory)
+                target = tuning(32, 131072, rank, str(memory))
+                self.assertEqual(source["PROFILE_RANK"], rank)
+                for key in source:
+                    if key.startswith("PROFILE_HOST_") or key in ("PROFILE_CPU_RANK", "PROFILE_MEMORY_RANK", "PROFILE_CLUSTER_SIZING_RANK", "PROFILE_CLUSTER_SIZING_MEMORY_MIB"):
+                        continue
+                    self.assertEqual(target[key], source[key], key)
+                self.assertEqual(target["PROFILE_HOST_VCPU"], "32")
+                self.assertEqual(target["PROFILE_HOST_MEMORY_MIB"], "131072")
+                self.assertEqual(target["PROFILE_CLUSTER_SIZING_RANK"], rank)
+                self.assertEqual(target["PROFILE_CLUSTER_SIZING_MEMORY_MIB"], str(memory))
+        # A CPU-limited source can have far more RAM than its profile needs.
+        # A smaller target can retain exact capped tuning if capacity fits.
+        target = tuning(8, 32768, "0", "131072")
+        self.assertEqual(target["PROFILE_POSTGRES_DB_MEMORY_LIMIT"], "4608m")
+
+    def test_cluster_sizing_rejects_partial_invalid_or_insufficient_contract(self):
+        cases = (
+            (16, 32768, "0", ""), (16, 32768, "", "15989"),
+            (16, 32768, "4", "15989"), (16, 32768, "00", "15989"),
+            (16, 32768, "0", "015989"), (16, 32768, "0", "-1"),
+            (16, 32768, "0", "1000000000"), (16, 32768, "0", "1+2"),
+            (16, 32768, "2", "15989"), (8, 32768, "2", "32768"),
+            (16, 16384, "2", "32768"), (1, 1024, "0", "15989"),
+            (0, 32768, "0", "15989"), (16, 0, "0", "15989"),
+        )
+        for cpu, memory, rank, reference in cases:
+            with self.subTest(cpu=cpu, memory=memory, rank=rank, reference=reference):
+                result = self.run_engine_library(
+                    'load_profile_tuning "$TEST_CPU" "$TEST_MEMORY" "$TEST_RANK" "$TEST_REFERENCE"\nprintf "UNSAFE SUCCESS\\n"',
+                    extra_env={"TEST_CPU":str(cpu), "TEST_MEMORY":str(memory), "TEST_RANK":rank, "TEST_REFERENCE":reference})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertNotIn("UNSAFE SUCCESS", result.stdout)
+
+    def test_cluster_sizing_contract_survives_hydration_and_redeploy(self):
+        for mode in ("standalone", "legacy cluster", "retained", "prejoin", "partial", "missing source", "changed host"):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as temp_dir:
+                env_file = pathlib.Path(temp_dir) / "compose.env"
+                lines = []
+                if mode in ("legacy cluster", "retained", "changed host"):
+                    lines += ["BOREALIS_DEPLOYMENT_PROFILE_RANK=0", "BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=15989"]
+                if mode in ("retained", "prejoin", "changed host", "partial"):
+                    lines += ["BOREALIS_CLUSTER_SIZING_RANK=0"]
+                    if mode != "partial":
+                        lines += ["BOREALIS_CLUSTER_SIZING_MEMORY_MIB=15989"]
+                if mode == "changed host":
+                    lines[0:2] = ["BOREALIS_DEPLOYMENT_PROFILE_RANK=2", "BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB=32768"]
+                env_file.write_text("\n".join(lines) + "\n")
+                result = self.run_engine_library(r'''
+COMPOSE_ENV="$TEST_ENV_FILE"
+cluster_mode_enabled() { [[ "$TEST_MODE" != standalone && "$TEST_MODE" != prejoin ]]; }
+detect_host_vcpu() { printf '16\n'; }
+detect_host_memory_mib() { printf '32768\n'; }
+# Ambient process variables must not override controller-hydrated file.
+BOREALIS_CLUSTER_SIZING_RANK=3
+BOREALIS_CLUSTER_SIZING_MEMORY_MIB=131072
+load_deployment_profile_tuning
+printf '%s:%s:%s:%s\n' "$PROFILE_RANK" "$PROFILE_CLUSTER_SIZING_RANK" "$PROFILE_CLUSTER_SIZING_MEMORY_MIB" "$PROFILE_HOST_MEMORY_MIB"
+''', extra_env={"TEST_ENV_FILE":str(env_file), "TEST_MODE":mode})
+                if mode in ("partial", "missing source"):
+                    self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    expected = "2:::32768" if mode == "standalone" else "0:0:15989:32768"
+                    self.assertEqual(result.stdout.strip(), expected)
+
     def test_join_preparation_provisions_identity_and_build_dependencies(self):
         for case in ("fresh", "existing", "joined_group", "missing_python", "uid_collision", "package_failure", "docker_unreachable"):
             with self.subTest(case=case), tempfile.TemporaryDirectory() as temp_dir:
@@ -242,7 +342,7 @@ k3s --version
         result = self.run_engine_library(
             r'''
 systemd_unit_file_exists() { return 0; }
-run_privileged() { return 0; }
+run_privileged() { echo active; }
 classify_longhorn_multipath_maps() {
   [[ "$1" == "other" ]] && printf '%s\n' 'production-san'
 }
@@ -269,9 +369,15 @@ run_privileged() {
     : >"$BOREALIS_TEST_STATE"
     return 0
   fi
-  if [[ "$1" == "systemctl" && ("$2" == "is-active" || "$2" == "is-enabled") ]]; then
-    [[ ! -e "$BOREALIS_TEST_STATE" ]]
-    return
+  if [[ "$2" == "show" ]]; then
+    if [[ ! -e "$BOREALIS_TEST_STATE" ]]; then
+      echo active
+    elif [[ "$4" == "--property=ActiveState" ]]; then
+      echo inactive
+    elif [[ "$4" == "--property=UnitFileState" ]]; then
+      echo disabled
+    fi
+    return 0
   fi
   return 70
 }
@@ -288,6 +394,40 @@ ensure_longhorn_multipath_compatibility
                 calls.read_text(encoding="utf-8").strip(),
                 "systemctl disable --now multipathd.service multipathd.socket",
             )
+
+    def test_longhorn_static_multipath_socket_requires_no_activation(self):
+        for activity, dependency, success in [
+            ("inactive", "", True),
+            ("active", "", False),
+            ("inactive", "sockets.target", False),
+        ]:
+            with self.subTest(activity=activity, dependency=dependency), tempfile.TemporaryDirectory() as tmp:
+                result = self.run_engine_library(
+                    r'''
+BUILD_LOG="$TEST_LOG"
+systemd_unit_file_exists() { return 0; }
+classify_longhorn_multipath_maps() { return 0; }
+run_privileged() {
+  case "$2/$3/$4" in
+    show/multipathd.service/--property=ActiveState) echo inactive ;;
+    show/multipathd.service/--property=UnitFileState) echo disabled ;;
+    show/multipathd.socket/--property=ActiveState) echo "$TEST_ACTIVITY" ;;
+    show/multipathd.socket/--property=UnitFileState) echo static ;;
+    show/multipathd.socket/--value) echo "$TEST_DEPENDENCY" ;;
+    disable/--now/*) echo 'disable attempted' ;;
+    *) exit 91 ;;
+  esac
+}
+ensure_longhorn_multipath_compatibility
+''',
+                    extra_env={"TEST_ACTIVITY": activity, "TEST_DEPENDENCY": dependency,
+                               "TEST_LOG": str(pathlib.Path(tmp) / "build.log")},
+                )
+                self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                if success:
+                    self.assertFalse((pathlib.Path(tmp) / "build.log").exists())
+                else:
+                    self.assertIn("multipathd.socket did not reach a quiescent state", result.stderr)
 
     def test_debian_longhorn_dependency_install_waits_for_apt_lock(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -383,6 +523,31 @@ fi
 '''
         )
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_unattended_source_bootstrap_preserves_input_and_uses_account_home(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = pathlib.Path(directory) / "Engine.sh"
+            target.write_text('#!/bin/bash\nread -r line\nprintf "%s\\n" "$HOME" "$line" "$@"\n')
+            target.chmod(0o755)
+            env = dict(os.environ, BOREALIS_ENGINE_LIBRARY_MODE="1")
+            env.pop("HOME", None)
+            account = subprocess.check_output(["getent", "passwd", str(os.geteuid())], text=True)
+            result = subprocess.run(
+                ["bash", "-c", '''
+source "$1"
+source_available() { return 1; }
+sync_repo() { :; }
+log() { :; }
+INSTALL_DIR="$2"
+LAUNCH_ARGS=(deploy prod)
+sync_and_reexec_if_needed
+''', "bootstrap-test", str(REPO_ROOT / "Engine.sh"), directory],
+                env=env, input="piped input\n", capture_output=True, text=True, start_new_session=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), [account.split(":")[5], "piped input", "deploy", "prod"])
+            preserved = self.run_engine_library('printf "%s" "$HOME"', extra_env={"HOME": directory})
+            self.assertEqual(preserved.stdout, directory)
 
     def test_engine_release_version_uses_clean_commit_backed_development_identity(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -1210,6 +1375,42 @@ verify_cnpg_cutover_runtime "$cnpg_url"
         self.assertIn('--source-root "${SCRIPT_DIR}"', engine)
         self.assertIn("--on-active=5s", engine)
         self.assertNotIn('/bin/sh -c', engine[engine.index("schedule_borealis_node_manager_refresh() {"):function_start])
+
+    def test_development_refresh_selects_packaged_helper_even_with_matching_marker(self):
+        # Exercise the real dispatcher and hash a running executable. Only the
+        # privileged service/socket and marker operations are simulated.
+        script = r"""
+revision="$(git rev-parse HEAD)"
+BOREALIS_NODE_MANAGER_BINARY="$(readlink /proc/$$/exe)"
+BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="dev-$(printf '%064d' 1)"
+BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256="$(sha256sum "$BOREALIS_NODE_MANAGER_BINARY" | cut -d' ' -f1)"
+marker="$revision"
+run_privileged() {
+  case "$1" in
+    cat) printf '%s\n' "$marker";;
+    systemctl) case "$*" in *MainPID*) echo "$$";; *NeedDaemonReload*) echo no;; *) return 0;; esac;;
+    cmp) return 0;;
+    test) if [[ "$2" == -S ]]; then return 0; fi; command test "${@:2}";;
+    systemd-run) printf '%s\n' "$*";;
+    *) "$@";;
+  esac
+}
+record_borealis_node_manager_revision() { echo "record $1"; }
+schedule_borealis_node_manager_refresh "$revision"
+marker=older
+schedule_borealis_node_manager_refresh "$revision"
+marker="$revision"
+BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256="$(printf '%064d' 0)"
+schedule_borealis_node_manager_refresh "$revision"
+"""
+        result = self.run_engine_library(script)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        outputs = result.stdout.strip().splitlines()
+        self.assertEqual(len(outputs), 2, outputs)
+        self.assertTrue(outputs[0].startswith("record "))
+        self.assertIn("--development-candidate dev-", outputs[1])
+        self.assertIn("EnvironmentFile=/etc/borealis/development-catalog.env", outputs[1])
+        self.assertNotIn("api-backend/dist", outputs[1])
 
     def test_pair_approval_notifies_every_joiner(self):
         store = (

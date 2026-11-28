@@ -18,6 +18,8 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from websockets.exceptions import ConnectionClosed
+
 
 GUACAMOLE_WS_PATH = "/remote-desktop/vnc/guacamole"
 GUACAMOLE_PROTOCOL_VERSION = "VERSION_1_5_0"
@@ -519,11 +521,52 @@ async def _write_instruction(writer: Any, opcode: Any, *args: Any) -> None:
 async def _close_writer(writer: Any) -> None:
     if writer is None:
         return
+    failed = False
     try:
         writer.close()
+    except (Exception, asyncio.CancelledError):
+        failed = True
+    try:
         await writer.wait_closed()
-    except Exception:
-        pass
+    except (Exception, asyncio.CancelledError):
+        failed = True
+    if failed:
+        raise RuntimeError("guacd_cleanup_failed") from None
+
+
+async def _finish_guacd_cleanup(writer: Any, tasks: List[asyncio.Task]) -> None:
+    async def _cleanup() -> None:
+        cancelled_tasks = set()
+        for task in tasks:
+            if not task.done() and not task.cancelling():
+                task.cancel()
+                cancelled_tasks.add(task)
+        try:
+            outcomes = await asyncio.gather(*tasks, return_exceptions=True)
+        finally:
+            await _close_writer(writer)
+        if any(
+            (isinstance(outcome, Exception) and not isinstance(outcome, ConnectionClosed))
+            or (isinstance(outcome, asyncio.CancelledError) and task not in cancelled_tasks)
+            for task, outcome in zip(tasks, outcomes)
+        ):
+            raise RuntimeError("guacd_forwarding_failed") from None
+        for outcome in outcomes:
+            if isinstance(outcome, ConnectionClosed):
+                raise outcome
+
+    # Cancellation must not detach cleanup or cancel it a second time while
+    # forwarding tasks or the owned stream are still releasing resources.
+    cleanup = asyncio.create_task(_cleanup(), name="guacd_cleanup")
+    cancelled = False
+    while not cleanup.done():
+        try:
+            await asyncio.shield(cleanup)
+        except asyncio.CancelledError:
+            cancelled = True
+    cleanup.result()
+    if cancelled:
+        raise asyncio.CancelledError
 
 
 async def _handshake_guacd(
@@ -640,7 +683,7 @@ async def _open_ready_guacd(
             return reader, writer, uuid_value, pending
         except GuacdBackendRetryableError as exc:
             last_error = exc
-            await _close_writer(writer)
+            await _finish_guacd_cleanup(writer, [])
             logger.warning(
                 "Guacamole VNC target backend failed attempt=%s/%s status=%s message=%s",
                 attempt,
@@ -649,9 +692,12 @@ async def _open_ready_guacd(
                 exc.message,
             )
             break
+        except asyncio.CancelledError:
+            await _finish_guacd_cleanup(writer, [])
+            raise
         except Exception as exc:
             last_error = exc
-            await _close_writer(writer)
+            await _finish_guacd_cleanup(writer, [])
             if attempt >= _GUACD_READY_ATTEMPTS:
                 break
             logger.warning(
@@ -688,6 +734,7 @@ async def proxy_guacamole_vnc_session(
     server_message_count = 0
     server_byte_count = 0
     first_frame_reported = False
+    tasks: List[asyncio.Task] = []
 
     def _notify_first_frame(opcode: str) -> None:
         nonlocal first_frame_reported
@@ -835,29 +882,21 @@ async def proxy_guacamole_vnc_session(
                     len(instruction_buffer),
                 )
 
-        tasks = [
-            asyncio.create_task(_ws_to_guacd(), name="browser_to_guacd"),
-            asyncio.create_task(_guacd_to_ws(), name="guacd_to_browser"),
-        ]
-        done, pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-        for task in pending:
-            task.cancel()
-        if pending:
-            await asyncio.gather(*pending, return_exceptions=True)
-        logger.info(
-            "Guacamole VNC bridge completed done=%s client_messages=%s client_instructions=%s client_pings=%s server_messages=%s server_instructions=%s server_bytes=%s",
-            ",".join(task.get_name() for task in done),
-            client_message_count,
-            client_instruction_count,
-            client_ping_count,
-            server_message_count,
-            server_instruction_count,
-            server_byte_count,
-        )
-        for task in done:
-            task.result()
+        tasks.append(asyncio.create_task(_ws_to_guacd(), name="browser_to_guacd"))
+        tasks.append(asyncio.create_task(_guacd_to_ws(), name="guacd_to_browser"))
+        done, _pending = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
     finally:
-        await _close_writer(writer)
+        await _finish_guacd_cleanup(writer, tasks)
+    logger.info(
+        "Guacamole VNC bridge completed done=%s client_messages=%s client_instructions=%s client_pings=%s server_messages=%s server_instructions=%s server_bytes=%s",
+        ",".join(task.get_name() for task in done),
+        client_message_count,
+        client_instruction_count,
+        client_ping_count,
+        server_message_count,
+        server_instruction_count,
+        server_byte_count,
+    )
 
 
 __all__ = [

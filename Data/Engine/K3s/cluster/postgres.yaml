@@ -31,6 +31,7 @@ metadata:
   labels: {app.kubernetes.io/part-of: borealis}
 spec:
   instances: 3
+  # BOREALIS_POSTGRES_RESOURCES
   primaryUpdateStrategy: unsupervised
   failoverDelay: 10
   switchoverDelay: 30

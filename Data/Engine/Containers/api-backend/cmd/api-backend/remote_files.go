@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -895,6 +896,10 @@ func remoteFilePostWorkerUpload(ctx context.Context, auth *authService, route *a
 	if auth == nil || route == nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
 	}
+	request.DeviceGUID = normalizeCanonicalGUID(request.DeviceGUID)
+	if request.DeviceGUID == "" {
+		return nil, http.StatusBadGateway, map[string]any{"error": "worker_request_failed", "message": "Upload target identity is unavailable."}
+	}
 	target := workerInternalURL(route, "/remote-files/transfers/upload")
 	if target == "" {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
@@ -915,7 +920,12 @@ func remoteFilePostWorkerUpload(ctx context.Context, auth *authService, route *a
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
-	resp, err := http.DefaultClient.Do(req)
+	// Private, authorized context lets the worker acquire its staging slot
+	// before multipart parsing consumes uploaded bytes. Never copy browser headers.
+	req.Header.Set("X-Borealis-Upload-Hostname-B64", base64.RawURLEncoding.EncodeToString([]byte(request.Hostname)))
+	req.Header.Set("X-Borealis-Upload-Device-Guid", request.DeviceGUID)
+	req.Header.Set("X-Borealis-Upload-Agent-Id-B64", base64.RawURLEncoding.EncodeToString([]byte(request.AgentID)))
+	resp, err := doWorkerOperationRequest(req)
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
 	}
@@ -1039,7 +1049,7 @@ func remoteFileWorkerJSONRequest(ctx context.Context, auth *authService, route *
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWorkerOperationRequest(req)
 	if err != nil {
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}
 	}
@@ -1066,7 +1076,7 @@ func remoteFileWorkerContentResponse(ctx context.Context, auth *authService, rou
 	}
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set(internalTokenHeader, goInternalToken(auth.verifier.secret))
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := doWorkerOperationRequest(req)
 	if err != nil {
 		cancel()
 		return nil, http.StatusServiceUnavailable, map[string]any{"error": "site_worker_unavailable", "message": "The site-worker route did not answer."}

@@ -62,14 +62,77 @@ type commandResult struct {
 
 type commandRunner func(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error)
 
+type commandCompletion struct {
+	started bool
+	joined  bool
+}
+type completionRunner func(context.Context, time.Duration, string, ...string) (commandResult, commandCompletion, error)
+type readinessSettings struct {
+	engineAddress string
+	localAddress  string
+	port          int
+}
+
+// Per-request native ownership. Results and TCP readiness never replace Wait.
+type readinessWork struct {
+	runner  completionRunner
+	dial    func(context.Context, string, string) (net.Conn, error)
+	unknown bool
+	err     error
+}
+
+func (w *readinessWork) run(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+	if w.err != nil {
+		return commandResult{}, w.err
+	}
+	if err := ctx.Err(); err != nil {
+		w.err = err
+		return commandResult{}, err
+	}
+	result, owned, err := w.runner(ctx, timeout, name, args...)
+	if owned.started && !owned.joined {
+		w.unknown = true
+		err = fmt.Errorf("RDP command completion unconfirmed")
+	} else if !owned.started && err == nil {
+		err = fmt.Errorf("RDP command did not start")
+	}
+	if err != nil {
+		w.err = err
+	}
+	return result, err
+}
+
+func (w *readinessWork) probe(ctx context.Context, port int) bool {
+	if w.err != nil {
+		return false
+	}
+	if err := ctx.Err(); err != nil {
+		w.err = err
+		return false
+	}
+	conn, err := w.dial(ctx, "tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(port)))
+	if conn != nil {
+		// Even an error response owns its returned connection until Close finishes.
+		if closeErr := conn.Close(); closeErr != nil {
+			w.err = closeErr
+		}
+	}
+	if ctx.Err() != nil {
+		w.err = ctx.Err()
+	}
+	return err == nil && conn != nil && w.err == nil
+}
+
 type Manager struct {
-	authClient    AuthClient
-	baseDir       string
-	configPath    string
-	logPath       string
-	platform      string
-	runner        commandRunner
-	listenerProbe func(int) bool
+	authClient       AuthClient
+	baseDir          string
+	configPath       string
+	logPath          string
+	platform         string
+	runner           commandRunner
+	completionRunner completionRunner
+	readinessDial    func(context.Context, string, string) (net.Conn, error)
+	listenerProbe    func(int) bool
 
 	mu                sync.Mutex
 	ensureMu          sync.Mutex
@@ -184,6 +247,103 @@ func (m *Manager) HandleStart(ctx context.Context, payload any) (any, error) {
 		return map[string]any{"status": "error", "error": "rdp_service_not_ready", "detail": err.Error(), "ready": false}, nil
 	}
 	return map[string]any{"status": "ok", "ready": true, "port": m.currentPort()}, nil
+}
+
+// HandleStartWithCompletion proves this readiness request finished. It does not
+// own persistent TermService or any later browser/desktop session.
+func (m *Manager) HandleStartWithCompletion(ctx context.Context, payload any, complete func(error)) (any, error) {
+	if complete == nil {
+		return m.HandleStart(ctx, payload)
+	}
+	data, valid := payload.(map[string]any)
+	if !valid || m == nil || !m.supported {
+		err := fmt.Errorf("RDP readiness request unavailable")
+		complete(err)
+		return map[string]any{"status": "error", "error": "rdp_service_not_ready", "detail": err.Error(), "ready": false}, nil
+	}
+	if !m.payloadForThisAgent(data) {
+		complete(fmt.Errorf("RDP readiness request targets another agent"))
+		return map[string]any{"status": "ignored", "agent_id": m.agentID()}, nil
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	bounded, stop := context.WithTimeout(ctx, maxReadinessTimeout)
+	requestCtx, cancel := readinessRequestContext(bounded, data["timeout_seconds"])
+	runner := m.completionRunner
+	if runner == nil {
+		runner = runCommandWithCompletion
+	}
+	dial := m.readinessDial
+	if dial == nil {
+		dial = (&net.Dialer{Timeout: 750 * time.Millisecond}).DialContext
+	}
+	work := &readinessWork{runner: runner, dial: dial}
+	reason := cleanText(data["reason"])
+	if reason == "" {
+		reason = "rdp_session_start"
+	}
+	var settings readinessSettings
+	err := func() error {
+		locked, err := m.acquireEnsure(requestCtx, false)
+		if err != nil {
+			return err
+		}
+		if !locked {
+			return fmt.Errorf("RDP readiness ownership unavailable")
+		}
+		defer m.ensureMu.Unlock()
+		if err := requestCtx.Err(); err != nil {
+			return err
+		}
+		m.applyEngineSettings(data)
+		settings = m.readinessSettings()
+		probe := func(port int) bool {
+			if port != settings.port {
+				work.err = fmt.Errorf("RDP readiness probe endpoint changed")
+			}
+			ready := work.probe(requestCtx, port)
+			if work.err != nil {
+				cancel()
+			}
+			return ready
+		}
+		// Routine audit/coalescing shortcuts cannot prove foreground readiness.
+		if !(supportsReadyFastPath(reason) && m.cachedReadyWithProbe(probe)) {
+			if err := m.reconcileReady(requestCtx, reason, settings, work.run, probe); err != nil {
+				return err
+			}
+		}
+		if work.err != nil {
+			return work.err
+		}
+		if err := requestCtx.Err(); err != nil {
+			return err
+		}
+		if m.readinessSettings() != settings {
+			return fmt.Errorf("RDP readiness settings changed")
+		}
+		return nil
+	}()
+	cancel()
+	stop()
+	response := map[string]any{"status": "ok", "ready": true, "port": settings.port}
+	if err != nil {
+		response = map[string]any{"status": "error", "error": "rdp_service_not_ready", "detail": err.Error(), "ready": false}
+	}
+	if work.unknown {
+		response["status"], response["error"] = "pending", "rdp_completion_unconfirmed"
+		return response, nil
+	}
+	// Release lifecycle ownership and join request cleanup before original receipt.
+	complete(err)
+	return response, nil
+}
+
+func (m *Manager) readinessSettings() readinessSettings {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return readinessSettings{m.engineAddress, m.localAddress, m.port}
 }
 
 func (m *Manager) Health() RoleHealth {
@@ -340,10 +500,12 @@ func (m *Manager) ensureReady(ctx context.Context, reason string) error {
 	if m.skipCachedEnsure(reason) {
 		return nil
 	}
+	return m.reconcileReady(ctx, reason, m.readinessSettings(), m.runner, m.listenerReady)
+}
+
+func (m *Manager) reconcileReady(ctx context.Context, reason string, settings readinessSettings, runner commandRunner, probe func(int) bool) error {
+	engineAddress, localAddress, port := settings.engineAddress, settings.localAddress, settings.port
 	m.mu.Lock()
-	engineAddress := m.engineAddress
-	localAddress := m.localAddress
-	port := m.port
 	m.lastEnsureAt = time.Now().Unix()
 	m.mu.Unlock()
 	if engineAddress == "" || localAddress == "" {
@@ -353,28 +515,33 @@ func (m *Manager) ensureReady(ctx context.Context, reason string) error {
 	m.lastReconcileAt = time.Now().Unix()
 	m.mu.Unlock()
 	enablementStarted := time.Now()
-	if err := m.ensureWindowsRDP(ctx); err != nil {
-		m.recordNotReady(ctx, err)
+	if err := m.ensureWindowsRDPWithRunner(ctx, runner); err != nil {
+		m.recordNotReadyWithRunner(ctx, err, runner)
 		return err
 	}
 	m.logEnsurePhase(reason, "enablement", enablementStarted)
 	firewallStarted := time.Now()
-	if err := m.ensureFirewall(ctx, engineAddress, localAddress, port); err != nil {
-		m.recordNotReady(ctx, err)
+	if err := m.ensureFirewallWithRunner(ctx, engineAddress, localAddress, port, runner); err != nil {
+		m.recordNotReadyWithRunner(ctx, err, runner)
 		return err
 	}
 	m.logEnsurePhase(reason, "firewall", firewallStarted)
 	listenerStarted := time.Now()
-	ready := m.waitForListener(ctx, port, listenerReadyWait)
-	serviceState := m.queryServiceState(ctx)
+	ready := waitForListenerWithProbe(ctx, port, listenerReadyWait, probe)
+	serviceState := queryServiceStateWithRunner(ctx, runner)
 	m.logEnsurePhase(reason, "listener", listenerStarted)
 	if !ready || !isServiceRunning(serviceState) {
 		err := fmt.Errorf("RDP listener not ready on port %d; TermService=%s", port, displayServiceState(serviceState))
-		m.recordNotReady(ctx, err)
+		m.recordNotReadyWithRunner(ctx, err, runner)
 		return err
 	}
 	now := time.Now().Unix()
 	m.mu.Lock()
+	if (readinessSettings{m.engineAddress, m.localAddress, m.port}) != settings {
+		m.lastReady = false
+		m.mu.Unlock()
+		return fmt.Errorf("RDP readiness settings changed")
+	}
 	m.lastReady = true
 	m.lastReadyAt = now
 	m.lastServiceState = serviceState
@@ -386,13 +553,17 @@ func (m *Manager) ensureReady(ctx context.Context, reason string) error {
 }
 
 func (m *Manager) ensureWindowsRDP(ctx context.Context) error {
+	return m.ensureWindowsRDPWithRunner(ctx, m.runner)
+}
+
+func (m *Manager) ensureWindowsRDPWithRunner(ctx context.Context, runner commandRunner) error {
 	command := "$ErrorActionPreference = 'Stop'; " +
 		"$path = 'HKLM:\\SYSTEM\\CurrentControlSet\\Control\\Terminal Server'; " +
 		"$current = (Get-ItemProperty -Path $path -Name fDenyTSConnections -ErrorAction Stop).fDenyTSConnections; " +
 		"if ([int]$current -ne 0) { Set-ItemProperty -Path $path -Name fDenyTSConnections -Value 0 -Force }; " +
 		"Set-Service -Name 'TermService' -StartupType Automatic; " +
 		"if ((Get-Service -Name 'TermService').Status -ne 'Running') { Start-Service -Name 'TermService' }"
-	result, err := m.runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
+	result, err := runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {
 		return commandExecutionError("RDP enablement", result, err)
 	}
@@ -403,11 +574,15 @@ func (m *Manager) ensureWindowsRDP(ctx context.Context) error {
 }
 
 func (m *Manager) ensureFirewall(ctx context.Context, engineAddress string, localAddress string, port int) error {
+	return m.ensureFirewallWithRunner(ctx, engineAddress, localAddress, port, m.runner)
+}
+
+func (m *Manager) ensureFirewallWithRunner(ctx context.Context, engineAddress string, localAddress string, port int, runner commandRunner) error {
 	command := buildFirewallCommand(engineAddress, localAddress, port)
 	if command == "" {
 		return fmt.Errorf("invalid RDP firewall scope")
 	}
-	result, err := m.runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
+	result, err := runner(ctx, 30*time.Second, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", command)
 	if err != nil {
 		return commandExecutionError("RDP firewall ensure", result, err)
 	}
@@ -463,7 +638,11 @@ func buildFirewallCommand(engineAddress string, localAddress string, port int) s
 }
 
 func (m *Manager) queryServiceState(ctx context.Context) string {
-	result, err := m.runner(ctx, 10*time.Second, "sc.exe", "query", termServiceName)
+	return queryServiceStateWithRunner(ctx, m.runner)
+}
+
+func queryServiceStateWithRunner(ctx context.Context, runner commandRunner) string {
+	result, err := runner(ctx, 10*time.Second, "sc.exe", "query", termServiceName)
 	if err != nil || result.ExitCode != 0 {
 		return ""
 	}
@@ -492,9 +671,13 @@ func (m *Manager) listenerReady(port int) bool {
 }
 
 func (m *Manager) waitForListener(ctx context.Context, port int, timeout time.Duration) bool {
+	return waitForListenerWithProbe(ctx, port, timeout, m.listenerReady)
+}
+
+func waitForListenerWithProbe(ctx context.Context, port int, timeout time.Duration, probe func(int) bool) bool {
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
-		if m.listenerReady(port) {
+		if probe(port) {
 			return true
 		}
 		timer := time.NewTimer(500 * time.Millisecond)
@@ -505,11 +688,15 @@ func (m *Manager) waitForListener(ctx context.Context, port int, timeout time.Du
 		case <-timer.C:
 		}
 	}
-	return m.listenerReady(port)
+	return probe(port)
 }
 
 func (m *Manager) recordNotReady(ctx context.Context, err error) {
-	serviceState := m.queryServiceState(ctx)
+	m.recordNotReadyWithRunner(ctx, err, m.runner)
+}
+
+func (m *Manager) recordNotReadyWithRunner(ctx context.Context, err error, runner commandRunner) {
+	serviceState := queryServiceStateWithRunner(ctx, runner)
 	m.mu.Lock()
 	m.lastReady = false
 	m.lastServiceState = serviceState
@@ -538,6 +725,10 @@ func (m *Manager) currentPort() int {
 }
 
 func (m *Manager) cachedReady() bool {
+	return m.cachedReadyWithProbe(m.listenerReady)
+}
+
+func (m *Manager) cachedReadyWithProbe(probe func(int) bool) bool {
 	if m == nil {
 		return false
 	}
@@ -550,7 +741,7 @@ func (m *Manager) cachedReady() bool {
 	if !ready {
 		return false
 	}
-	if m.listenerReady(port) {
+	if probe(port) {
 		return true
 	}
 	m.mu.Lock()
@@ -676,19 +867,26 @@ func (m *Manager) logf(format string, args ...any) {
 }
 
 func runCommand(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, error) {
+	result, _, err := runCommandWithCompletion(ctx, timeout, name, args...)
+	return result, err
+}
+
+func runCommandWithCompletion(ctx context.Context, timeout time.Duration, name string, args ...string) (commandResult, commandCompletion, error) {
 	commandCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(commandCtx, name, args...)
+	// Output uses this Cmd's Start/Wait, joining output copies and closing pipes.
 	stdout, err := cmd.Output()
+	owned := commandCompletion{started: cmd.Process != nil, joined: cmd.ProcessState != nil}
 	result := commandResult{Stdout: string(stdout), ExitCode: 0}
 	if err == nil {
-		return result, nil
+		return result, owned, nil
 	}
 	if exitErr, ok := err.(*exec.ExitError); ok {
 		result.Stderr = string(exitErr.Stderr)
 		result.ExitCode = exitErr.ExitCode()
 	}
-	return result, err
+	return result, owned, err
 }
 
 func normalizeIPv4Address(value any) string {

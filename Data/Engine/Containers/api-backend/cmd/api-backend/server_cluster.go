@@ -38,6 +38,7 @@ var (
 	clusterUUIDRE                 = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	clusterReleaseRE              = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
 	clusterQualificationReleaseRE = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?-rc\.[1-9][0-9]*$`)
+	clusterSnapshotReleaseRE      = regexp.MustCompile(`^dev-[0-9a-f]{64}$`)
 	clusterDevelopmentReleaseRE   = regexp.MustCompile(`^dev-[0-9a-f]{12}$`)
 	clusterRepoRE                 = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	clusterK3sRE                  = regexp.MustCompile(`^v([0-9]+)\.([0-9]+)\.([0-9]+)\+k3s([0-9]+)$`)
@@ -111,6 +112,8 @@ func clusterRemovalNodeIDs(targetNodeID string, payload map[string]any) []string
 }
 
 func registerServerClusterRoutes(mux *http.ServeMux, auth *authService) {
+	registerClusterSSHPreflightRoutes(mux, auth)
+	registerClusterSSHOnboardingRoutes(mux, auth)
 	mux.HandleFunc("GET /api/server/cluster", clusterSnapshotHandler(auth))
 	mux.HandleFunc("GET /api/server/cluster/banner", clusterBannerHandler(auth))
 	mux.HandleFunc("GET /api/server/cluster/events", clusterEventsHandler(auth))
@@ -200,6 +203,7 @@ func clusterSnapshotHandler(auth *authService) http.HandlerFunc {
 		}
 		payload["probe_conformance"] = clusterProbeConformancePayload()
 		payload["k3s_version"], _ = clusterConfiguredK3sVersion(payload)
+		payload["development_catalog_enabled"] = clusterCandidateDirectory() != ""
 		writeJSON(w, http.StatusOK, payload)
 	}
 }
@@ -243,7 +247,11 @@ func clusterReleasesHandler(auth *authService) http.HandlerFunc {
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
-		ctx = clusterContextWithGitHubToken(ctx, auth)
+		query, parseErr := url.ParseQuery(r.URL.RawQuery)
+		if parseErr != nil || len(query) > 0 && (len(query) != 1 || len(query["channel"]) != 1 || query.Get("channel") != "development") {
+			writePublicValidationErrors(w, []publicValidationError{{Field: "channel", Message: "must be development when provided"}})
+			return
+		}
 		store, ok := auth.store.(clusterStore)
 		if !ok {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "cluster_control_unavailable"})
@@ -259,10 +267,26 @@ func clusterReleasesHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "release_catalog_unavailable", "message": err.Error()})
 			return
 		}
+		if query.Get("channel") == "development" {
+			items, err := localSnapshotReleases(currentSHA, k3sVersion, developmentVersionFloor(snapshot))
+			if err != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": "development_catalog_unavailable"})
+				return
+			}
+			writeJSON(w, http.StatusOK, map[string]any{"current_release": current, "current_channel": clusterReleaseChannel(current), "releases": items})
+			return
+		}
+		ctx = clusterContextWithGitHubToken(ctx, auth.store, auth.aegis)
 		items, err := fetchClusterReleaseCatalog(ctx, current, currentSHA, k3sVersion)
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "release_catalog_unavailable", "message": err.Error()})
 			return
+		}
+		for _, item := range items {
+			if coerceClusterBool(item["selectable"]) && !supportedSnapshotExit(snapshot, item) {
+				item["selectable"] = false
+				item["reason"] = "published release is outside the development snapshot's rolling version range"
+			}
 		}
 		writeJSON(w, http.StatusOK, map[string]any{"current_release": current, "current_channel": clusterReleaseChannel(current), "releases": items})
 	}
@@ -447,6 +471,12 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 		}
 		releaseChannel := clusterReleaseChannel(releaseTag)
 		requiredConfirmation := "UPDATE CLUSTER"
+		if updateType == "engine" && clusterSnapshotReleaseRE.MatchString(releaseTag) {
+			requiredConfirmation = "DEPLOY DEVELOPMENT"
+			if scope != "all" || len(nodeIDs) != 0 {
+				errs = append(errs, publicValidationError{Field: "scope", Message: "development snapshots must target the whole cluster"})
+			}
+		}
 		if updateType == "engine" && releaseChannel == "qualification" {
 			requiredConfirmation = "DEPLOY QUALIFICATION"
 			if scope != "all" || len(nodeIDs) != 0 {
@@ -520,15 +550,24 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			writeJSON(w, http.StatusAccepted, result)
 			return
 		}
-		ctx = clusterContextWithGitHubToken(ctx, auth)
 		current, currentSHA, k3sVersion, stateErr := clusterReleaseState(snapshot)
 		if stateErr != nil {
 			writeJSON(w, http.StatusConflict, map[string]any{"error": "release_not_selectable", "message": stateErr.Error()})
 			return
 		}
-		release, err := resolveClusterRelease(ctx, releaseTag, current, currentSHA, k3sVersion)
+		var release map[string]any
+		if clusterSnapshotReleaseRE.MatchString(releaseTag) {
+			release, err = localSnapshotRelease(releaseTag, currentSHA, k3sVersion, developmentVersionFloor(snapshot))
+		} else {
+			ctx = clusterContextWithGitHubToken(ctx, auth.store, auth.aegis)
+			release, err = resolveClusterRelease(ctx, releaseTag, current, currentSHA, k3sVersion)
+		}
 		if err != nil {
 			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "release_not_selectable", "message": err.Error()})
+			return
+		}
+		if releaseChannel != "development" && !supportedSnapshotExit(snapshot, release) {
+			writeJSON(w, http.StatusUnprocessableEntity, map[string]any{"error": "release_not_selectable", "message": "published release is outside the development snapshot's rolling version range"})
 			return
 		}
 		if cleanText(release["channel"]) != releaseChannel {
@@ -536,6 +575,11 @@ func clusterUpdateHandler(auth *authService) http.HandlerFunc {
 			return
 		}
 		payload := map[string]any{"scope": scope, "node_ids": nodeIDs, "release_title": release["title"], "source_release": current, "source_sha": currentSHA, "source_channel": clusterReleaseChannel(current), "release_channel": releaseChannel, "compatibility": release["compatibility"], "source_k3s_version": k3sVersion, "release_immutable": true, "maintenance_outage_acknowledgement": outageAcknowledgement}
+		if releaseChannel == "development" {
+			payload["release_origin"] = "engine_snapshot"
+			payload["development_version_floor"] = developmentVersionFloor(snapshot)
+			payload["validation_status"] = "pending"
+		}
 		targetNodeID := ""
 		if scope == "node" {
 			targetNodeID = nodeIDs[0]
@@ -613,6 +657,15 @@ func clusterMutationHandler(auth *authService, kind string, parse func(map[strin
 		}
 		ctx, cancel := requestTimeout(r.Context(), auth)
 		defer cancel()
+		if kind == "cluster_enable" && os.Getenv("BOREALIS_DEVELOPMENT_CATALOG_ENABLED") == "true" && clusterDevelopmentReleaseRE.MatchString(cleanText(mutation.Payload["baseline_release"])) {
+			tag, sha, err := initialDevelopmentAncestor(clusterContextWithGitHubToken(ctx, auth.store, auth.aegis), cleanText(mutation.Payload["baseline_sha"]), cleanText(mutation.Payload["k3s_version"]))
+			if err != nil {
+				writeClusterError(w, fmt.Errorf("%w: could not verify the installed development source's release ancestry: %v", errClusterConflict, err))
+				return
+			}
+			mutation.Payload["development_ancestor_release"] = tag
+			mutation.Payload["development_ancestor_sha"] = sha
+		}
 		result, err := store.createClusterOperation(ctx, identity.Username, mutation)
 		if err != nil {
 			writeClusterError(w, err)
@@ -939,8 +992,11 @@ func validateClusterUUID(field, value string) []publicValidationError {
 }
 
 func validateClusterRelease(value string) []publicValidationError {
+	if clusterSnapshotReleaseRE.MatchString(value) {
+		return nil
+	}
 	if len(value) > clusterReleaseMaxLength || (clusterReleaseChannel(value) != "stable" && clusterReleaseChannel(value) != "qualification") {
-		return []publicValidationError{{Field: "release_tag", Message: "must use YYYY.MM.REVISION[.HOTFIX] or YYYY.MM.REVISION[.HOTFIX]-rc.N and be no longer than 32 characters"}}
+		return []publicValidationError{{Field: "release_tag", Message: "must be a stable or qualification release tag of up to 32 characters, or dev- followed by 64 lowercase hex digits"}}
 	}
 	return nil
 }
@@ -952,7 +1008,7 @@ func clusterReleaseChannel(release string) string {
 		return "stable"
 	case clusterQualificationReleaseRE.MatchString(release):
 		return "qualification"
-	case clusterDevelopmentReleaseRE.MatchString(release):
+	case clusterDevelopmentReleaseRE.MatchString(release) || clusterSnapshotReleaseRE.MatchString(release):
 		return "development"
 	default:
 		return ""
@@ -987,6 +1043,9 @@ func validClusterBaselineRelease(release, sha string) bool {
 	}
 	if clusterReleaseRE.MatchString(release) || clusterQualificationReleaseRE.MatchString(release) {
 		return true
+	}
+	if clusterSnapshotReleaseRE.MatchString(release) {
+		return clusterBaselineExpected(release, sha).Validate() == nil
 	}
 	return clusterDevelopmentReleaseRE.MatchString(release) && release == "dev-"+sha[:12]
 }
@@ -1120,8 +1179,16 @@ func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA, runnin
 
 	items := make([]map[string]any, 0)
 	foundCurrent := false
-	for page := 1; page <= 20 && !foundCurrent; page++ {
-		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=100&page=%d", clusterGitHubAPIBase(), repo, page)
+	// GitHub includes every asset in each release list entry. Keep requests
+	// small enough for the standard bounded JSON reader and retain the
+	// existing history budgets for release-backed and development baselines.
+	const pageSize = 10
+	maxReleases := 2000
+	if current == "" || clusterDevelopmentReleaseRE.MatchString(current) || clusterSnapshotReleaseRE.MatchString(current) {
+		maxReleases = 100
+	}
+	for page := 1; page <= maxReleases/pageSize && !foundCurrent; page++ {
+		endpoint := fmt.Sprintf("%s/repos/%s/releases?per_page=%d&page=%d", clusterGitHubAPIBase(), repo, pageSize, page)
 		var releases []clusterGitHubRelease
 		if err := clusterGitHubJSON(ctx, endpoint, &releases); err != nil {
 			return nil, err
@@ -1156,11 +1223,8 @@ func fetchClusterReleaseCatalog(ctx context.Context, current, currentSHA, runnin
 				break
 			}
 		}
-		// Standalone and commit-backed development baselines have no stable
-		// current tag to find. One page populates the picker without walking
-		// irrelevant historical release pages.
-		if current == "" || clusterDevelopmentReleaseRE.MatchString(current) {
-			foundCurrent = true
+		if len(releases) < pageSize {
+			break
 		}
 	}
 	sort.SliceStable(items, func(i, j int) bool {
@@ -1190,7 +1254,7 @@ func hydrateClusterRelease(ctx context.Context, release clusterGitHubRelease, cu
 	}
 	var manifest clusterReleaseManifest
 	manifestErr := clusterGitHubJSON(ctx, manifestURL, &manifest)
-	selectable := manifestErr == nil && manifest.SchemaVersion == 1 && manifest.ClusterCompatible && clusterManifestAllowsChannel(manifest, channel) && clusterReleaseRE.MatchString(manifest.MinimumRollingVersion) && textInSet(manifest.DatabaseMigration, "none", "expand-contract") && clusterK3sRE.MatchString(manifest.RequiredK3sBaseline) && manifest.RequiredK3sConformance == "pod-restart-policy-liveness-delay-guard-v1"
+	selectable := manifestErr == nil && validRollingManifest(manifest, channel)
 	reason := ""
 	if manifestErr != nil {
 		reason = "release lacks cluster compatibility manifest"
@@ -1338,16 +1402,18 @@ func clusterGitHubJSON(ctx context.Context, endpoint string, output any) error {
 	return json.Unmarshal(raw, output)
 }
 
-func clusterContextWithGitHubToken(ctx context.Context, auth *authService) context.Context {
-	if auth == nil || auth.aegis == nil {
+func clusterContextWithGitHubToken(ctx context.Context, operators operatorStore, aegis authSecretService) context.Context {
+	if aegis == nil {
 		return ctx
 	}
-	store, ok := auth.store.(githubTokenManagementStore)
+	store, ok := operators.(githubTokenManagementStore)
 	if !ok {
 		return ctx
 	}
-	record, err := store.loadGithubToken(ctx, auth.aegis)
-	if err != nil || strings.TrimSpace(record.Token) == "" {
+	lookup, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	record, err := store.loadGithubToken(lookup, aegis)
+	if err != nil || record.ResetRequired || strings.TrimSpace(record.Token) == "" {
 		return ctx
 	}
 	return context.WithValue(ctx, clusterGitHubTokenContextKey{}, strings.TrimSpace(record.Token))
@@ -1411,4 +1477,8 @@ func copyClusterReleaseItems(input []map[string]any) []map[string]any {
 		out = append(out, copyMap(item))
 	}
 	return out
+}
+
+func validRollingManifest(manifest clusterReleaseManifest, channel string) bool {
+	return manifest.SchemaVersion == 1 && manifest.ClusterCompatible && clusterManifestAllowsChannel(manifest, channel) && clusterReleaseRE.MatchString(manifest.MinimumRollingVersion) && textInSet(manifest.DatabaseMigration, "none", "expand-contract") && clusterK3sRE.MatchString(manifest.RequiredK3sBaseline) && manifest.RequiredK3sConformance == "pod-restart-policy-liveness-delay-guard-v1"
 }

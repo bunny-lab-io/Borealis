@@ -33,6 +33,10 @@ type RoleHealth struct {
 	Details    map[string]any
 }
 
+// OperationBinder durably claims a session before any shell execution.
+// Completion is called only after process Wait, or closed-before-start proof.
+type OperationBinder func(context.Context, map[string]any) (func(error), error)
+
 type Manager struct {
 	hostname    string
 	serviceMode string
@@ -45,25 +49,47 @@ type Manager struct {
 	shellKind   string
 	shellBin    string
 
-	mu            sync.Mutex
-	sessionMu     sync.Mutex
-	started       bool
-	listening     bool
-	lastError     string
-	lastCheckedAt int64
-	listener      net.Listener
-	cancel        context.CancelFunc
-	session       *shellSession
+	mu                  sync.Mutex
+	lifecycleMu         sync.Mutex
+	run                 *shellGeneration
+	lifetime            context.Context
+	sessionMu           sync.Mutex
+	started             bool
+	listening           bool
+	lastError           string
+	lastCheckedAt       int64
+	listener            net.Listener
+	cancel              context.CancelFunc
+	session             *shellSession
+	operationBinder     OperationBinder
+	operationGeneration uint64
+	requireOperation    bool
+}
+
+// A generation retains every accepted session until its reader, pending bind,
+// output pumps and original process Wait/completion have returned. Closed or
+// superseded sessions remain owned until then. Fields are guarded by Manager.mu.
+type shellGeneration struct {
+	ctx         context.Context
+	cancel      context.CancelFunc
+	listener    net.Listener
+	sessions    map[*shellSession]struct{}
+	work        sync.WaitGroup
+	done        chan struct{}
+	ready       chan error
+	readyOnce   sync.Once
+	unconfirmed bool
 }
 
 type shellSession struct {
-	conn      net.Conn
-	address   string
-	shellKind string
-	shellBin  string
-	logf      func(string, ...any)
-	onClosed  func(*shellSession)
-	onReady   func(*shellSession)
+	conn       net.Conn
+	address    string
+	shellKind  string
+	shellBin   string
+	logf       func(string, ...any)
+	onClosed   func(*shellSession)
+	onReady    func(*shellSession)
+	generation *shellGeneration
 
 	writeMu sync.Mutex
 	metaMu  sync.Mutex
@@ -72,9 +98,19 @@ type shellSession struct {
 	once    sync.Once
 	ready   sync.Once
 
-	proc   *exec.Cmd
-	stdin  io.WriteCloser
-	closed chan struct{}
+	proc             *exec.Cmd
+	stdin            io.WriteCloser
+	closed           chan struct{}
+	requireOperation bool
+	bindOperation    OperationBinder
+	bound            bool
+	complete         func(error)
+	terminalOnce     sync.Once
+	terminalErr      error
+	unconfirmed      bool
+	ctx              context.Context
+	cancel           context.CancelFunc
+	work             sync.WaitGroup
 
 	engineSessionID    string
 	lastInput          inputMeta
@@ -94,15 +130,16 @@ type inputMeta struct {
 func New(hostname string, serviceMode string, configPath string) *Manager {
 	baseDir := filepath.Dir(configPath)
 	manager := &Manager{
-		hostname:    strings.TrimSpace(hostname),
-		serviceMode: strings.TrimSpace(serviceMode),
-		configPath:  strings.TrimSpace(configPath),
-		baseDir:     baseDir,
-		logPath:     filepath.Join(baseDir, "Logs", "Agent", "remote_shell.log"),
-		platform:    runtime.GOOS,
-		host:        defaultShellHost,
-		port:        resolveShellPort(),
-		shellKind:   detectShellKind(),
+		requireOperation: true,
+		hostname:         strings.TrimSpace(hostname),
+		serviceMode:      strings.TrimSpace(serviceMode),
+		configPath:       strings.TrimSpace(configPath),
+		baseDir:          baseDir,
+		logPath:          filepath.Join(baseDir, "Logs", "Agent", "remote_shell.log"),
+		platform:         runtime.GOOS,
+		host:             defaultShellHost,
+		port:             resolveShellPort(),
+		shellKind:        detectShellKind(),
 	}
 	switch manager.shellKind {
 	case "powershell":
@@ -118,61 +155,138 @@ func (m *Manager) Start(ctx context.Context) {
 	if m == nil {
 		return
 	}
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
 	m.mu.Lock()
-	if m.started {
-		m.mu.Unlock()
-		return
+	if m.run == nil {
+		m.lifetime = ctx
+	}
+	m.mu.Unlock()
+	m.startGeneration(ctx)
+}
+
+// startGeneration is called with lifecycleMu held. A retained unconfirmed
+// generation prevents another listener from adopting uncertain old work.
+func (m *Manager) startGeneration(ctx context.Context) *shellGeneration {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.run != nil || ctx.Err() != nil {
+		return nil
 	}
 	m.started = true
 	if m.shellKind == "" || m.shellBin == "" {
 		m.lastError = "No compatible remote shell binary is available."
 		m.lastCheckedAt = time.Now().Unix()
-		m.mu.Unlock()
-		return
+		return nil
 	}
 	runCtx, cancel := context.WithCancel(ctx)
-	m.cancel = cancel
-	m.mu.Unlock()
-
-	m.logf("Remote shell supervisor starting platform=%s host=%s port=%d shell=%s binary=%s", m.platform, m.host, m.port, m.shellKind, m.shellBin)
-	go m.serve(runCtx)
+	run := &shellGeneration{ctx: runCtx, cancel: cancel, sessions: map[*shellSession]struct{}{}, done: make(chan struct{}), ready: make(chan error, 1)}
+	m.run, m.cancel = run, cancel
+	go m.serve(run)
+	return run
 }
 
 func (m *Manager) Stop(ctx context.Context) {
 	if m == nil {
 		return
 	}
+	m.lifecycleMu.Lock()
+	defer m.lifecycleMu.Unlock()
+	// Cancellation requests a stop; it cannot substitute for owned work joining.
+	m.stopGeneration()
+}
+
+// stopGeneration returns false when an original Wait could not prove exit.
+// Even then all local goroutines have returned; the generation remains fenced.
+func (m *Manager) stopGeneration() bool {
 	m.mu.Lock()
-	if m.cancel != nil {
-		m.cancel()
-	}
-	listener := m.listener
-	m.listener = nil
-	m.listening = false
-	m.started = false
-	m.lastCheckedAt = time.Now().Unix()
+	run := m.run
 	m.mu.Unlock()
-	if listener != nil {
-		_ = listener.Close()
+	if run == nil {
+		return true
 	}
-	m.closeCurrentSession()
-	select {
-	case <-ctx.Done():
-	default:
+	run.cancel()
+	<-run.done
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if run.unconfirmed {
+		return false
 	}
+	if m.run == run {
+		m.run = nil
+	}
+	return true
 }
 
 func (m *Manager) Restart(ctx context.Context, reason string) {
+	m.RestartWithCompletion(ctx, reason, nil)
+}
+
+// RestartWithCompletion acknowledges only the joined old generation and an
+// installed replacement listener. It never completes any old shell operation.
+// An uncertain original Wait withholds completion and blocks replacement.
+func (m *Manager) RestartWithCompletion(ctx context.Context, reason string, complete func(error)) {
 	if m == nil {
 		return
 	}
-	cleanReason := strings.TrimSpace(reason)
-	if cleanReason == "" {
-		cleanReason = "role_supervisor_recovery"
+	// Supervisor recovery can repeat while an original Wait is unresolved.
+	// Coalesce untracked requests; tracked contenders prove only their own
+	// pre-effect rejection and never accumulate lifecycle-lock waiters.
+	if !m.lifecycleMu.TryLock() {
+		if complete != nil {
+			go complete(fmt.Errorf("remote shell restart already in progress"))
+		}
+		return
 	}
-	m.logf("Remote shell restart requested reason=%s", cleanReason)
-	m.Stop(context.Background())
-	m.Start(ctx)
+	go func() {
+		err, joined := m.restart(ctx, reason)
+		m.lifecycleMu.Unlock()
+		if joined && complete != nil {
+			complete(err)
+		}
+	}()
+}
+
+func (m *Manager) restart(ctx context.Context, reason string) (error, bool) {
+	if err := ctx.Err(); err != nil {
+		return err, true
+	}
+	m.logf("Remote shell restart requested reason=%s", strings.TrimSpace(reason))
+	if !m.stopGeneration() {
+		return nil, false
+	}
+	if err := ctx.Err(); err != nil {
+		return err, true
+	}
+	m.mu.Lock()
+	lifetime := m.lifetime
+	m.mu.Unlock()
+	if lifetime == nil {
+		return fmt.Errorf("remote shell role owner unavailable"), true
+	}
+	run := m.startGeneration(lifetime)
+	if run == nil {
+		return fmt.Errorf("remote shell listener unavailable"), true
+	}
+	var err error
+	select {
+	case err = <-run.ready:
+	case <-ctx.Done():
+		err = ctx.Err()
+	case <-run.done:
+		err = fmt.Errorf("remote shell listener stopped")
+	}
+	if err == nil {
+		m.mu.Lock()
+		if ctx.Err() != nil || run.ctx.Err() != nil || m.run != run || run.listener == nil {
+			err = fmt.Errorf("remote shell listener ownership lost")
+		}
+		m.mu.Unlock()
+	}
+	if err != nil && !m.stopGeneration() {
+		return nil, false
+	}
+	return err, true
 }
 
 func (m *Manager) Health() RoleHealth {
@@ -257,38 +371,86 @@ func (m *Manager) Health() RoleHealth {
 	}
 }
 
-func (m *Manager) serve(ctx context.Context) {
+func (m *Manager) serve(run *shellGeneration) {
+	closed := make(chan struct{})
+	go func() {
+		defer close(closed)
+		<-run.ctx.Done()
+		m.mu.Lock()
+		listener := run.listener
+		sessions := make([]*shellSession, 0, len(run.sessions))
+		for session := range run.sessions {
+			sessions = append(sessions, session)
+		}
+		if m.run == run {
+			m.listener, m.listening, m.started = nil, false, false
+			m.lastCheckedAt = time.Now().Unix()
+		}
+		m.mu.Unlock()
+		if listener != nil {
+			_ = listener.Close()
+		}
+		for _, session := range sessions {
+			session.close()
+		}
+	}()
+	defer func() {
+		run.cancel()
+		<-closed
+		run.work.Wait()
+		close(run.done)
+	}()
 	address := net.JoinHostPort(m.host, strconv.Itoa(m.port))
-	for ctx.Err() == nil {
+	for run.ctx.Err() == nil {
 		listener, err := net.Listen("tcp", address)
 		if err != nil {
-			m.setState(false, err.Error(), nil)
-			m.logf("Remote shell listener failed host=%s port=%d error=%v; retrying in %s", m.host, m.port, err, retryDelay)
-			if !sleepContext(ctx, retryDelay) {
+			run.readyOnce.Do(func() { run.ready <- err })
+			m.setState(run, false, err.Error(), nil)
+			if !sleepContext(run.ctx, retryDelay) {
 				return
 			}
 			continue
 		}
-		m.setState(true, "", listener)
-		m.logf("Remote shell listening host=%s port=%d shell=%s binary=%s", m.host, m.port, m.shellKind, m.shellBin)
-		for ctx.Err() == nil {
+		if !m.setState(run, true, "", listener) {
+			_ = listener.Close()
+			return
+		}
+		run.readyOnce.Do(func() { run.ready <- nil })
+		for run.ctx.Err() == nil {
 			conn, err := listener.Accept()
 			if err != nil {
-				if ctx.Err() != nil {
-					_ = listener.Close()
+				_ = listener.Close()
+				if run.ctx.Err() != nil {
 					return
 				}
-				m.setState(false, err.Error(), nil)
-				m.logf("Remote shell accept error: %v", err)
-				_ = listener.Close()
+				m.setState(run, false, err.Error(), nil)
 				break
 			}
-			m.handleConnection(conn)
+			m.handleConnection(run, conn)
 		}
 	}
 }
 
-func (m *Manager) handleConnection(conn net.Conn) {
+// SetOperationBinder captures this connection's durable operation owner. Cleanup
+// cannot erase a newer Socket.IO connection's binder. A nil binder still fences
+// active sessions while passive readiness remains available.
+func (m *Manager) SetOperationBinder(binder OperationBinder) func() {
+	m.mu.Lock()
+	m.requireOperation = true
+	m.operationGeneration++
+	generation := m.operationGeneration
+	m.operationBinder = binder
+	m.mu.Unlock()
+	return func() {
+		m.mu.Lock()
+		if m.operationGeneration == generation {
+			m.operationBinder = nil
+		}
+		m.mu.Unlock()
+	}
+}
+
+func (m *Manager) handleConnection(run *shellGeneration, conn net.Conn) {
 	remoteHost := remoteHost(conn.RemoteAddr())
 	if !isAllowedShellRemote(remoteHost) {
 		m.logf("Rejected remote shell connection from %s", remoteHost)
@@ -297,15 +459,45 @@ func (m *Manager) handleConnection(conn net.Conn) {
 	}
 	configureTCPSocket(conn)
 	session := newShellSession(conn, conn.RemoteAddr().String(), m.shellKind, m.shellBin, m.logf, m.onSessionClosed, m.activateSession)
-	m.logf("Accepted remote shell connection from %s", conn.RemoteAddr().String())
-	go session.start()
+	m.startSession(run, session)
+}
+
+func (m *Manager) startSession(run *shellGeneration, session *shellSession) {
+	m.mu.Lock()
+	if m.run != run || run.ctx.Err() != nil {
+		m.mu.Unlock()
+		session.close()
+		return
+	}
+	session.generation = run
+	session.requireOperation = m.requireOperation
+	session.bindOperation = m.operationBinder
+	run.sessions[session] = struct{}{}
+	run.work.Add(1)
+	m.mu.Unlock()
+	go func() {
+		defer run.work.Done()
+		session.start()
+		m.mu.Lock()
+		session.procMu.Lock()
+		run.unconfirmed = run.unconfirmed || session.unconfirmed
+		session.procMu.Unlock()
+		delete(run.sessions, session)
+		m.mu.Unlock()
+	}()
 }
 
 func (m *Manager) activateSession(session *shellSession) {
 	if session == nil || session.isClosed() {
 		return
 	}
+	m.mu.Lock()
+	if session.generation != nil && (m.run != session.generation || session.generation.ctx.Err() != nil) {
+		m.mu.Unlock()
+		return
+	}
 	m.sessionMu.Lock()
+	m.mu.Unlock()
 	prior := m.session
 	if prior == session {
 		m.sessionMu.Unlock()
@@ -327,25 +519,17 @@ func (m *Manager) onSessionClosed(session *shellSession) {
 	m.sessionMu.Unlock()
 }
 
-func (m *Manager) closeCurrentSession() {
-	m.sessionMu.Lock()
-	session := m.session
-	m.session = nil
-	m.sessionMu.Unlock()
-	if session != nil {
-		session.close()
-	}
-}
-
-func (m *Manager) setState(listening bool, lastError string, listener net.Listener) {
+func (m *Manager) setState(run *shellGeneration, listening bool, lastError string, listener net.Listener) bool {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.run != run || run.ctx.Err() != nil {
+		return false
+	}
 	m.listening = listening
 	m.lastError = strings.TrimSpace(lastError)
 	m.lastCheckedAt = time.Now().Unix()
-	if listener != nil || !listening {
-		m.listener = listener
-	}
-	m.mu.Unlock()
+	m.listener, run.listener = listener, listener
+	return true
 }
 
 func (m *Manager) logf(format string, args ...any) {
@@ -361,7 +545,9 @@ func newShellSession(conn net.Conn, address string, shellKind string, shellBin s
 	if logf == nil {
 		logf = func(string, ...any) {}
 	}
+	ctx, cancel := context.WithCancel(context.Background())
 	return &shellSession{
+		ctx: ctx, cancel: cancel,
 		conn:      conn,
 		address:   strings.TrimSpace(address),
 		shellKind: strings.TrimSpace(shellKind),
@@ -376,22 +562,32 @@ func newShellSession(conn net.Conn, address string, shellKind string, shellBin s
 func (s *shellSession) start() {
 	s.logf("Shell session starting remote=%s type=%s", s.address, s.shellKind)
 	s.writerLoop()
+	s.close()
+	s.work.Wait()
 }
 
 func (s *shellSession) ensureProcessStarted() error {
 	s.procMu.Lock()
+	if s.isClosed() || s.requireOperation && !s.bound {
+		s.procMu.Unlock()
+		return fmt.Errorf("shell operation unavailable")
+	}
 	if s.proc != nil && s.stdin != nil {
 		s.procMu.Unlock()
 		return nil
 	}
 	stdout, stderr, err := s.startProcessLocked()
+	proc := s.proc
+	if err == nil {
+		s.work.Add(3)
+	}
 	s.procMu.Unlock()
 	if err != nil {
 		return err
 	}
-	go s.readOutput(stdout, "stdout")
-	go s.readOutput(stderr, "stderr")
-	go s.waitProcess()
+	go func() { defer s.work.Done(); s.readOutput(stdout, "stdout") }()
+	go func() { defer s.work.Done(); s.readOutput(stderr, "stderr") }()
+	go func() { defer s.work.Done(); s.waitProcess(proc) }()
 	return nil
 }
 
@@ -431,20 +627,33 @@ func (s *shellSession) startProcessLocked() (io.Reader, io.Reader, error) {
 	return stdout, stderr, nil
 }
 
-func (s *shellSession) waitProcess() {
-	s.procMu.Lock()
-	proc := s.proc
-	s.procMu.Unlock()
+func (s *shellSession) waitProcess(proc *exec.Cmd) {
 	if proc == nil {
 		return
 	}
-	err := proc.Wait()
+	s.waitForTerminal(func() (error, bool) {
+		err := proc.Wait()
+		return err, proc.ProcessState != nil
+	})
+}
+
+func (s *shellSession) waitForTerminal(wait func() (error, bool)) {
+	err, joined := wait()
+	if !joined {
+		s.procMu.Lock()
+		s.unconfirmed = true
+		s.procMu.Unlock()
+		s.logf("Shell process exit unconfirmed; tracked operation remains unresolved: %v", err)
+		s.close()
+		return
+	}
 	if err != nil {
 		s.logf("Shell subprocess exited error=%v", err)
 	} else {
 		s.logf("Shell subprocess exited cleanly")
 	}
 	s.close()
+	s.completeTerminal(err)
 }
 
 func (s *shellSession) readOutput(reader io.Reader, label string) {
@@ -496,12 +705,16 @@ func (s *shellSession) handleLine(line []byte) {
 		return
 	}
 	s.captureSessionID(msg)
-	s.markReady()
+	if !s.requireOperation {
+		s.markReady()
+	}
 	if s.handleControlMessage(msg) {
 		return
 	}
 	msgType := strings.ToLower(strings.TrimSpace(fmt.Sprint(msg["type"])))
 	switch msgType {
+	case "worker_operation_bind":
+		s.handleOperationBind(msg)
 	case "stdin":
 		s.handleStdin(msg)
 	case "close":
@@ -550,6 +763,49 @@ func (s *shellSession) handleControlMessage(msg map[string]any) bool {
 	return true
 }
 
+func (s *shellSession) handleOperationBind(msg map[string]any) {
+	s.procMu.Lock()
+	unavailable := s.bound || s.proc != nil || s.isClosed() || s.bindOperation == nil
+	s.procMu.Unlock()
+	sessionID, validID := msg["session_id"].(string)
+	if unavailable || len(msg) != 4 || !validID || sessionID == "" || len(sessionID) > 128 || sessionID != s.sessionID() {
+		s.close()
+		return
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 15*time.Second)
+	complete, err := s.bindOperation(ctx, msg)
+	cancel()
+	if err != nil || complete == nil {
+		s.close()
+		return
+	}
+	s.procMu.Lock()
+	s.bound, s.complete = true, complete
+	closed := s.isClosed()
+	s.procMu.Unlock()
+	if closed {
+		s.completeTerminal(nil)
+		return
+	}
+	s.markReady()
+	operationContext, _ := msg["context"].(map[string]any)
+	if err := s.sendJSON(map[string]any{
+		"type": "worker_operation_bound", "session_id": sessionID, "job_id": msg["job_id"],
+		"worker_operation": operationContext["worker_operation"], "status": "accepted",
+	}); err != nil {
+		s.close()
+	}
+}
+
+func (s *shellSession) completeTerminal(err error) {
+	s.procMu.Lock()
+	complete := s.complete
+	s.procMu.Unlock()
+	if complete != nil {
+		s.terminalOnce.Do(func() { complete(err) })
+	}
+}
+
 func (s *shellSession) handleStdin(msg map[string]any) {
 	payload := strings.TrimSpace(fmt.Sprint(msg["data"]))
 	decoded, err := base64.StdEncoding.DecodeString(payload)
@@ -558,6 +814,9 @@ func (s *shellSession) handleStdin(msg map[string]any) {
 		return
 	}
 	if err := s.ensureProcessStarted(); err != nil {
+		s.procMu.Lock()
+		s.terminalErr = err
+		s.procMu.Unlock()
 		s.logf("Shell subprocess start failed error=%v session_id=%s", err, s.sessionID())
 		s.sendStdout([]byte(fmt.Sprintf("[borealis] Failed to start remote shell: %v\n", err)))
 		s.close()
@@ -683,12 +942,13 @@ func (s *shellSession) isClosed() bool {
 func (s *shellSession) close() {
 	s.once.Do(func() {
 		close(s.closed)
+		s.cancel()
 		_ = s.conn.Close()
 		s.procMu.Lock()
 		stdin := s.stdin
 		proc := s.proc
 		s.stdin = nil
-		s.proc = nil
+		terminalErr := s.terminalErr
 		s.procMu.Unlock()
 		if stdin != nil {
 			_ = stdin.Close()
@@ -708,6 +968,9 @@ func (s *shellSession) close() {
 		}
 		if s.onClosed != nil {
 			s.onClosed(s)
+		}
+		if proc == nil {
+			s.completeTerminal(terminalErr)
 		}
 	})
 }

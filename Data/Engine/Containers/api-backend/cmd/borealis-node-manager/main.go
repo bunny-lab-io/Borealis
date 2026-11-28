@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -39,7 +40,7 @@ const (
 	memberFencePath     = "/etc/borealis/k3s-member-removal-fence.json"
 	memberFenceDropIn   = "/etc/systemd/system/k3s.service.d/90-borealis-member-removal-fence.conf"
 	k3sRegistriesPath   = "/etc/rancher/k3s/registries.yaml"
-	k3sJoinConfigPath   = "/etc/rancher/k3s/config.yaml.d/20-borealis-cluster-join.yaml"
+	k3sJoinConfigPath   = clusterbootstrap.PrejoinK3sJoinConfigPath
 	k3sImageImportPath  = "/var/lib/rancher/k3s/agent/images"
 	shutdownHandoffWait = 25 * time.Second
 	shutdownHandoffPoll = 250 * time.Millisecond
@@ -48,6 +49,7 @@ const (
 var (
 	stableReleasePattern        = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?$`)
 	qualificationReleasePattern = regexp.MustCompile(`^[0-9]{4}\.[0-9]{1,2}\.[0-9]+(?:\.[0-9]+)?-rc\.[1-9][0-9]*$`)
+	snapshotReleasePattern      = regexp.MustCompile(`^dev-[0-9a-f]{64}$`)
 	developmentReleasePattern   = regexp.MustCompile(`^dev-[0-9a-f]{12}$`)
 	shaPattern                  = regexp.MustCompile(`^[0-9a-f]{40}$`)
 	nodePattern                 = regexp.MustCompile(`^[a-z0-9](?:[-a-z0-9]{0,61}[a-z0-9])?$`)
@@ -68,9 +70,32 @@ type manager struct {
 
 func main() {
 	if len(os.Args) < 2 {
-		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff>")
+		fatalf("usage: borealis-node-manager <serve|status|join|client|activate-update|shutdown-handoff|bootstrap-session>")
+	}
+	if clusterbootstrap.IsPairExecutor() {
+		switch os.Args[1] {
+		case "bootstrap-source-session", "bootstrap-source-session-contained", "bootstrap-artifact-session", "bootstrap-artifact-session-contained":
+		default:
+			fatalf("pair recovery executor only supports supervised preparation")
+		}
 	}
 	switch os.Args[1] {
+	case "external-image-proof":
+		if externalImageArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable external image evidence invalid or changed")
+		}
+	case "k3s-archive-proof":
+		if k3sArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable K3s evidence invalid or changed")
+		}
+	case "development-candidate-proof":
+		if err := developmentCandidateProof(os.Args[2:]); err != nil {
+			fatalf("development candidate verification failed: %v", err)
+		}
+	case "image-archive-proof":
+		if imageArchiveProof(os.Args[2:]) != nil {
+			fatalf("immutable image evidence invalid or changed")
+		}
 	case "serve":
 		serve()
 	case "status":
@@ -81,10 +106,38 @@ func main() {
 		join(os.Args[2:])
 	case "client":
 		client(os.Args[2:])
+	case "source-membership-client":
+		if sourceMembershipClient(os.Args[2:]) != nil {
+			fatalf("source membership observation unavailable")
+		}
+	case "source-network-client":
+		if sourceNetworkClient(os.Args[2:]) != nil {
+			fatalf("source network observation unavailable")
+		}
+	case "source-join-client":
+		if sourceJoinClient(os.Args[2:]) != nil {
+			fatalf("source join material unavailable")
+		}
+	case "source-vip-client":
+		if sourceObservationClient(os.Args[2:], true) != nil {
+			fatalf("source VIP observation unavailable")
+		}
 	case "activate-update":
 		activateUpdate(os.Args[2:])
 	case "shutdown-handoff":
 		shutdownHandoff()
+	case "bootstrap-session":
+		bootstrapSession(os.Args[2:])
+	case "bootstrap-session-contained":
+		bootstrapSessionContained(os.Args[2:])
+	case "bootstrap-source-session":
+		bootstrapExecutor(os.Args[2:], true)
+	case "bootstrap-source-session-contained":
+		bootstrapSourceSessionContained(os.Args[2:])
+	case "bootstrap-artifact-session":
+		bootstrapExecutorFor(os.Args[2:], true, true)
+	case "bootstrap-artifact-session-contained":
+		bootstrapSourceSessionContainedFor(os.Args[2:], true)
 	default:
 		fatalf("unsupported command %q", os.Args[1])
 	}
@@ -236,22 +289,25 @@ func client(args []string) {
 	clusterVIP := flags.String("cluster-vip", "", "Borealis Cluster Virtual IP")
 	operationID := flags.String("operation-id", "", "Removal operation UUID")
 	nodeID := flags.String("node-id", "", "Durable removal target UUID")
-	removalNodeName := flags.String("node-name", "", "Expected removal target node name")
+	removalNodeName := flags.String("node-name", "", "Expected target node name")
 	nodeUID := flags.String("node-uid", "", "Expected Kubernetes Node UID")
 	etcdMemberName := flags.String("etcd-member-name", "", "Expected K3s etcd member name")
+	preparedAdmission := flags.String("prepared-admission", "", "Exact private prepared admission request")
 	_ = flags.Parse(args)
 	allowed := map[string]bool{
 		"Status": true, "EnterApplicationDrain": true, "ExitApplicationDrain": true,
 		"PrepareApplicationRestore": true,
+		"InspectIdentityConsumers":  true,
 		"ReconcileVIPPlacement":     true,
 		"FenceEdge":                 true, "RestoreEdgeEligibility": true, "FetchRelease": true,
 		"PreflightRelease": true, "StagePinnedRelease": true, "RedeployRevision": true, "RedeployStagedRevision": true,
 		"StageRevisionImages": true,
-		"InspectHealth":       true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
-		"RunSchemaPhase":         true,
-		"PrepareMemberRemoval":   true,
-		"RunK3sProbeConformance": true,
-		"CreateEtcdSnapshot":     true,
+		"InspectHealth":       true, "InspectSourceNetwork": true, "InspectCandidateHealth": true, "PromoteCandidate": true, "EnrollCluster": true,
+		"RunSchemaPhase":                       true,
+		"PrepareMemberRemoval":                 true,
+		"RunK3sProbeConformance":               true,
+		"CreateEtcdSnapshot":                   true,
+		clusterbootstrap.PreparedAdmissionVerb: true,
 	}
 	if !allowed[strings.TrimSpace(*verb)] {
 		fatalf("unsupported fixed verb %q", *verb)
@@ -280,7 +336,24 @@ func client(args []string) {
 			params[key] = value
 		}
 	}
+	if *preparedAdmission != "" || strings.TrimSpace(*verb) == clusterbootstrap.PreparedAdmissionVerb {
+		if strings.TrimSpace(*verb) != clusterbootstrap.PreparedAdmissionVerb || len(params) != 0 || flags.NArg() != 0 {
+			fatalf("invalid prepared admission request")
+		}
+		if _, err := clusterbootstrap.DecodePreparedAdmissionRequest(*preparedAdmission); err != nil {
+			fatalf("invalid prepared admission request")
+		}
+		params["payload"] = *preparedAdmission
+	}
 	var removalTarget memberRemovalIdentity
+	var identityTarget identityConsumerTarget
+	if strings.TrimSpace(*verb) == "InspectIdentityConsumers" {
+		var err error
+		identityTarget, err = parseIdentityConsumerTarget(params, *removalNodeName)
+		if err != nil {
+			fatalf("invalid identity consumer target")
+		}
+	}
 	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
 		var err error
 		removalTarget, err = removalIdentity(params, *removalNodeName)
@@ -300,6 +373,17 @@ func client(args []string) {
 		return dialer.DialContext(ctx, "unix", socketPath)
 	}}
 	httpClient := &http.Client{Transport: transport, Timeout: nodeManagerActionTimeout(strings.TrimSpace(*verb)) + time.Minute}
+	if strings.TrimSpace(*verb) == clusterbootstrap.PreparedAdmissionVerb {
+		ctx, cancel := context.WithTimeout(context.Background(), nodeManagerActionTimeout(clusterbootstrap.PreparedAdmissionVerb)+time.Minute)
+		defer cancel()
+		defer transport.CloseIdleConnections()
+		responseRaw, err := readPreparedAdmissionAcknowledgement(ctx, httpClient, strings.TrimSpace(string(secret)), *preparedAdmission)
+		if err != nil {
+			fatalf("prepared admission action failed; retain operation for reconciliation")
+		}
+		fmt.Println(string(responseRaw))
+		return
+	}
 	request, err := http.NewRequest(http.MethodPost, "http://node-manager/v1/action", bytes.NewReader(raw))
 	if err != nil {
 		fatalf("create node-manager request: %v", err)
@@ -318,6 +402,11 @@ func client(args []string) {
 	if strings.TrimSpace(*verb) == "PrepareMemberRemoval" {
 		if err := validateRemovalAcknowledgement(responseRaw, removalTarget); err != nil {
 			fatalf("node-manager removal acknowledgement rejected: %v", err)
+		}
+	}
+	if strings.TrimSpace(*verb) == "InspectIdentityConsumers" {
+		if err := validateIdentityConsumerAcknowledgement(responseRaw, identityTarget); err != nil {
+			fatalf("node-manager identity consumer acknowledgement rejected")
 		}
 	}
 	fmt.Println(string(responseRaw))
@@ -358,6 +447,7 @@ func serve() {
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "node_name": m.nodeName})
 	})
 	mux.HandleFunc("POST /v1/action", m.authorized(m.handleAction))
+	mux.HandleFunc("POST "+clusterbootstrap.K3sJoinSourceSocketPath, m.authorized(m.handleSourceJoinMaterial))
 	server := &http.Server{Handler: mux, ReadHeaderTimeout: 5 * time.Second}
 	rootCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -468,6 +558,24 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_json", "message": err.Error()})
 		return
 	}
+	if strings.TrimSpace(request.Verb) == "InspectVIPNetwork" {
+		if _, err := clusterbootstrap.ParseVIPActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
+	if strings.TrimSpace(request.Verb) == "InspectSourceMembership" {
+		if _, err := clusterbootstrap.ParseMembershipActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
+	if strings.TrimSpace(request.Verb) == clusterbootstrap.PreparedAdmissionVerb {
+		if _, err := clusterbootstrap.ParsePreparedAdmissionActionRequest(raw); err != nil {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid_request"})
+			return
+		}
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), nodeManagerActionTimeout(request.Verb))
 	defer cancel()
 	result, err := m.execute(ctx, request)
@@ -480,9 +588,11 @@ func (m *manager) handleAction(w http.ResponseWriter, r *http.Request) {
 
 func nodeManagerActionTimeout(verb string) time.Duration {
 	switch strings.TrimSpace(verb) {
+	case "InspectSourceNetwork", "InspectVIPNetwork", "InspectIdentityConsumers", "InspectSourceMembership":
+		return 15 * time.Second
 	case "EnrollCluster":
 		return 90 * time.Minute
-	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate":
+	case "StageRevisionImages", "RedeployRevision", "RedeployStagedRevision", "PromoteCandidate", clusterbootstrap.PreparedAdmissionVerb:
 		return 60 * time.Minute
 	case "RunSchemaPhase":
 		return 20 * time.Minute
@@ -495,7 +605,16 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	if request.Params == nil {
 		request.Params = map[string]any{}
 	}
+	snapshot := ""
+	if release, ok := request.Params["release_tag"].(string); ok && strings.HasPrefix(release, "dev-") && !developmentReleasePattern.MatchString(release) {
+		if !snapshotReleasePattern.MatchString(release) {
+			return nil, errors.New("invalid immutable development identity")
+		}
+		snapshot = release
+	}
 	switch strings.TrimSpace(request.Verb) {
+	case clusterbootstrap.PreparedAdmissionVerb:
+		return m.preparedAdmission(ctx, request.Params)
 	case "Status":
 		return m.status(ctx)
 	case "EnterApplicationDrain":
@@ -517,19 +636,34 @@ func (m *manager) execute(ctx context.Context, request actionRequest) (map[strin
 	case "StagePinnedRelease":
 		return m.stagePinnedRelease(ctx, requiredRelease(request.Params), requiredSHA(request.Params))
 	case "RedeployRevision":
-		return m.redeployRevision(ctx, requiredSHA(request.Params))
+		return m.redeployRevision(ctx, requiredSHA(request.Params), snapshot)
 	case "StageRevisionImages":
-		return m.stageRevisionImages(ctx, requiredSHA(request.Params))
+		return m.stageRevisionImages(ctx, requiredSHA(request.Params), snapshot)
 	case "RedeployStagedRevision":
 		return m.redeployStagedRevision(ctx, requiredSHA(request.Params))
 	case "InspectHealth":
 		return m.inspectHealth(ctx)
+	case "InspectIdentityConsumers":
+		return m.inspectIdentityConsumers(ctx, request.Params)
+	case "InspectSourceMembership":
+		return m.inspectSourceMembership(ctx, request.Params)
+	case "InspectSourceNetwork":
+		if len(request.Params) != 0 {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceNetwork(ctx)
+	case "InspectVIPNetwork":
+		address, ok := request.Params["vip"].(string)
+		if len(request.Params) != 1 || !ok || !clusterbootstrap.ValidVIPRequest(address) {
+			return nil, clusterbootstrap.ErrPreparationConfig
+		}
+		return m.inspectSourceVIPNetwork(ctx, address)
 	case "InspectCandidateHealth":
 		return m.inspectCandidateHealth(ctx)
 	case "PromoteCandidate":
-		return m.promoteCandidate(ctx, requiredSHA(request.Params))
+		return m.promoteCandidate(ctx, requiredSHA(request.Params), snapshot)
 	case "RunSchemaPhase":
-		return m.runSchemaPhase(ctx, requiredSchemaPhase(request.Params), requiredSHA(request.Params))
+		return m.runSchemaPhase(ctx, requiredSchemaPhase(request.Params), requiredSHA(request.Params), snapshot)
 	case "PrepareMemberRemoval":
 		return m.prepareMemberRemoval(ctx, request.Params)
 	case "RunK3sProbeConformance":
@@ -618,6 +752,9 @@ func (m *manager) verifyReleaseRef(ctx context.Context, release, targetSHA strin
 	if err != nil || normalizeRemote(origin) != expectedOrigin {
 		return errors.New("origin does not match configured Borealis repository")
 	}
+	if snapshotReleasePattern.MatchString(release) {
+		return m.verifyLocalDevelopmentRevision(ctx, release, targetSHA)
+	}
 	ref := "refs/tags/" + release
 	if developmentReleasePattern.MatchString(release) {
 		ref = targetSHA
@@ -643,12 +780,12 @@ func validPinnedRelease(release, targetSHA string) bool {
 	if stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) {
 		return true
 	}
-	return developmentReleasePattern.MatchString(release) && release == "dev-"+targetSHA[:12]
+	return snapshotReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release) && release == "dev-"+targetSHA[:12]
 }
 
 func validReleaseName(release string) bool {
 	release = strings.TrimSpace(release)
-	return stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release)
+	return stableReleasePattern.MatchString(release) || qualificationReleasePattern.MatchString(release) || developmentReleasePattern.MatchString(release) || snapshotReleasePattern.MatchString(release)
 }
 
 func (m *manager) stagePinnedRelease(ctx context.Context, release, targetSHA string) (map[string]any, error) {
@@ -761,6 +898,7 @@ func activateUpdate(args []string) {
 	flags := flag.NewFlagSet("activate-update", flag.ExitOnError)
 	targetSHA := flags.String("target-sha", "", "Pinned lowercase commit SHA")
 	sourceRootFlag := flags.String("source-root", "", "Pinned release worktree root")
+	candidate := flags.String("development-candidate", "", "Exact local development candidate")
 	_ = flags.Parse(args)
 	if os.Geteuid() != 0 {
 		fatalf("activate-update requires root")
@@ -777,17 +915,6 @@ func activateUpdate(args []string) {
 	if err != nil || strings.ToLower(strings.TrimSpace(resolved)) != revision {
 		fatalf("activate-update source worktree does not match target SHA")
 	}
-	executable, err := os.Executable()
-	stagedBinary := filepath.Join(sourceRoot, "Data", "Engine", "Containers", "api-backend", "dist", "borealis-node-manager")
-	runningInfo, runningErr := os.Stat(executable)
-	stagedInfo, stagedErr := os.Stat(stagedBinary)
-	if err != nil || runningErr != nil || stagedErr != nil || !os.SameFile(runningInfo, stagedInfo) {
-		fatalf("activate-update must run target worktree node-manager binary")
-	}
-	serviceSource := filepath.Join(sourceRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")
-	if info, statErr := os.Stat(serviceSource); statErr != nil || !info.Mode().IsRegular() {
-		fatalf("activate-update target service unit is unavailable")
-	}
 	nodeName, err := os.Hostname()
 	nodeName = strings.ToLower(strings.TrimSpace(nodeName))
 	if err != nil || !nodePattern.MatchString(nodeName) {
@@ -795,38 +922,97 @@ func activateUpdate(args []string) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	defer cancel()
+	if err := activateNodeManagerFiles(ctx, nodeName, revision, sourceRoot, *candidate); err != nil {
+		fatalf("activate-update: %v", err)
+	}
+	fmt.Printf("{\"node_name\":%q,\"manager_revision\":%q,\"activated\":true}\n", nodeName, revision)
+}
+
+func activateNodeManagerFiles(ctx context.Context, nodeName, revision, sourceRoot, candidate string) error {
+	var stagedBinary, serviceSource string
+	if candidate == "" {
+		executable, err := os.Executable()
+		stagedBinary = filepath.Join(sourceRoot, "Data", "Engine", "Containers", "api-backend", "dist", "borealis-node-manager")
+		runningInfo, runningErr := os.Stat(executable)
+		stagedInfo, stagedErr := os.Stat(stagedBinary)
+		if err != nil || runningErr != nil || stagedErr != nil || !os.SameFile(runningInfo, stagedInfo) {
+			return errors.New("activate-update must run target worktree node-manager binary")
+		}
+		serviceSource = filepath.Join(sourceRoot, "Data", "Engine", "K3s", "cluster", "node-manager.service")
+		if info, statErr := os.Stat(serviceSource); statErr != nil || !info.Mode().IsRegular() {
+			return errors.New("activate-update target service unit is unavailable")
+		}
+	} else {
+		installed, err := os.Stat("/usr/local/sbin/borealis-node-manager")
+		running, procErr := os.Stat("/proc/self/exe")
+		if err != nil || procErr != nil || !os.SameFile(installed, running) {
+			return errors.New("development activation requires the installed node-manager")
+		}
+		catalog, manifest, err := developmentHelperManifest(candidate, revision)
+		if err != nil {
+			return err
+		}
+		parent := os.Getenv("BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES")
+		if _, err = catalog.MemberImageManifest(parent, "/etc/borealis"); err != nil {
+			return err
+		}
+		archive, err := catalog.OpenAsset(parent, clusterbootstrap.BundleName)
+		if err != nil {
+			return err
+		}
+		defer archive.Close()
+		// Use the normal byte/inode reservation and verified Git tree. The serving
+		// checkout may contain a dist binary from an entirely different build.
+		bundle, err := clusterbootstrap.Stage(ctx, "/var/tmp", manifest, archive, "")
+		if err != nil {
+			return err
+		}
+		defer bundle.Close()
+		stagedBinary = bundle.ManagerPath()
+		serviceSource = filepath.Join(bundle.SourcePath(), "Data", "Engine", "K3s", "cluster", "node-manager.service")
+	}
 	if err := waitForNodeActionIdle(ctx, nodeName); err != nil {
-		fatalf("wait for node action idle: %v", err)
+		return fmt.Errorf("wait for node action idle: %w", err)
+	}
+	head, err := runGit(ctx, sourceRoot, "rev-parse", "HEAD")
+	if err != nil || strings.TrimSpace(head) != revision {
+		return errors.New("activation worktree moved while waiting for node actions")
+	}
+	if candidate != "" {
+		marker, err := os.ReadFile(filepath.Join("/etc/borealis", "staged-"+candidate))
+		if err != nil || strings.TrimSpace(string(marker)) != revision {
+			return errors.New("development staging revision changed before activation")
+		}
 	}
 	binary, err := os.ReadFile(stagedBinary)
 	if err != nil {
-		fatalf("read target node-manager binary: %v", err)
+		return fmt.Errorf("read target node-manager binary: %w", err)
 	}
 	if err := replaceExecutable("/usr/local/sbin/borealis-node-manager", binary); err != nil {
-		fatalf("install target node-manager binary: %v", err)
+		return fmt.Errorf("install target node-manager binary: %w", err)
 	}
 	if err := ensureMemberFenceDropInDirectory(); err != nil {
-		fatalf("prepare member-removal systemd drop-in directory: %v", err)
+		return fmt.Errorf("prepare member-removal systemd drop-in directory: %w", err)
 	}
 	if _, err := run(ctx, "", "install", "-m", "0644", "-o", "root", "-g", "root", serviceSource, "/etc/systemd/system/"+defaultServiceName); err != nil {
-		fatalf("install target node-manager service unit: %v", err)
+		return fmt.Errorf("install target node-manager service unit: %w", err)
 	}
 	if _, err := run(ctx, "", "systemctl", "daemon-reload"); err != nil {
-		fatalf("reload target node-manager service unit: %v", err)
+		return fmt.Errorf("reload target node-manager service unit: %w", err)
 	}
 	if _, err := run(ctx, "", "systemctl", "enable", defaultServiceName); err != nil {
-		fatalf("enable target node-manager service: %v", err)
+		return fmt.Errorf("enable target node-manager service: %w", err)
 	}
 	if _, err := run(ctx, "", "systemctl", "restart", defaultServiceName); err != nil {
-		fatalf("restart node-manager service: %v", err)
+		return fmt.Errorf("restart node-manager service: %w", err)
 	}
 	if err := waitForActiveNodeManagerExecutable(ctx, defaultServiceName, "/usr/local/sbin/borealis-node-manager", defaultSocketPath); err != nil {
-		fatalf("verify refreshed node-manager service: %v", err)
+		return fmt.Errorf("verify refreshed node-manager service: %w", err)
 	}
 	if err := replaceSecureConfig(defaultRevisionPath, []byte(revision+"\n")); err != nil {
-		fatalf("record node-manager revision: %v", err)
+		return fmt.Errorf("record node-manager revision: %w", err)
 	}
-	fmt.Printf("{\"node_name\":%q,\"manager_revision\":%q,\"activated\":true}\n", nodeName, revision)
+	return nil
 }
 
 func waitForNodeActionIdle(ctx context.Context, nodeName string) error {
@@ -1239,13 +1425,41 @@ func (m *manager) preflightRelease(ctx context.Context, release, targetSHA strin
 	if strings.TrimSpace(dirty) != "" {
 		return nil, errors.New("worktree is not clean; refusing stash, reset, or checkout")
 	}
-	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", "HEAD", targetSHA); err != nil {
-		return nil, errors.New("target is not a fast-forward descendant")
+	head, err := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+	if err != nil {
+		return nil, err
+	}
+	head = strings.TrimSpace(head)
+	if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+		if snapshotReleasePattern.MatchString(release) {
+			return nil, errors.New("development upgrade lacks local fast-forward proof")
+		}
+		shallow, shallowErr := runGit(ctx, m.repoRoot, "rev-parse", "--is-shallow-repository")
+		if shallowErr != nil || strings.TrimSpace(shallow) != "true" {
+			return nil, errors.New("target is not a fast-forward descendant")
+		}
+		origin, originErr := runGit(ctx, m.repoRoot, "remote", "get-url", "origin")
+		if originErr != nil || normalizeRemote(origin) != normalizeRemote(envDefault("BOREALIS_ENGINE_REPOSITORY_URL", "https://github.com/bunny-lab-io/Borealis.git")) {
+			return nil, errors.New("origin does not match configured Borealis repository")
+		}
+		// A prior shallow boundary can hide even a fetched target's ancestry.
+		// Fetch only that pinned history once, within the existing action bound.
+		if _, err := runGit(ctx, m.repoRoot, "fetch", "--no-tags", "--unshallow", "origin", targetSHA); err != nil {
+			return nil, err
+		}
+		if _, err := runGit(ctx, m.repoRoot, "merge-base", "--is-ancestor", head, targetSHA); err != nil {
+			return nil, errors.New("target is not a fast-forward descendant")
+		}
+		current, headErr := runGit(ctx, m.repoRoot, "rev-parse", "HEAD")
+		dirty, statusErr := runGit(ctx, m.repoRoot, "status", "--porcelain", "--untracked-files=normal")
+		if headErr != nil || statusErr != nil || strings.TrimSpace(current) != head || strings.TrimSpace(dirty) != "" {
+			return nil, errors.New("worktree changed while fetching pinned ancestry; refusing checkout or mutation")
+		}
 	}
 	return map[string]any{"release_tag": release, "revision": targetSHA, "worktree_clean": true, "fast_forward": true}, nil
 }
 
-func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[string]any, error) {
+func (m *manager) redeployRevision(ctx context.Context, targetSHA, snapshot string) (map[string]any, error) {
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
@@ -1261,6 +1475,16 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	if err != nil {
 		return nil, err
 	}
+	if snapshot != "" {
+		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false); err != nil {
+			return nil, err
+		}
+		_, helper, err := developmentHelperManifest(snapshot, targetSHA)
+		if err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot, "BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256="+helper.ManagerSHA256())
+	}
 	engineEnv = append(engineEnv,
 		"BOREALIS_CLUSTER_DEPLOYMENT_MODE=candidate",
 		"/usr/bin/bash", enginePath, "--cluster-node-redeploy", "--revision", targetSHA,
@@ -1272,7 +1496,7 @@ func (m *manager) redeployRevision(ctx context.Context, targetSHA string) (map[s
 	return map[string]any{"revision": targetSHA, "redeployed": true, "output": truncate(output, 8192)}, nil
 }
 
-func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (map[string]any, error) {
+func (m *manager) stageRevisionImages(ctx context.Context, targetSHA, snapshot string) (map[string]any, error) {
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
@@ -1288,6 +1512,12 @@ func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (ma
 	if err != nil {
 		return nil, err
 	}
+	if snapshot != "" {
+		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, true); err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot)
+	}
 	engineEnv = append(engineEnv,
 		"/usr/bin/bash", enginePath, "--cluster-stage-revision", "--revision", targetSHA,
 	)
@@ -1298,7 +1528,7 @@ func (m *manager) stageRevisionImages(ctx context.Context, targetSHA string) (ma
 	return map[string]any{"revision": targetSHA, "images_staged": true, "output": truncate(output, 8192)}, nil
 }
 
-func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA string) (map[string]any, error) {
+func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA, snapshot string) (map[string]any, error) {
 	if phase != "expand" && phase != "finalize" {
 		return nil, errors.New("schema_phase must be expand or finalize")
 	}
@@ -1316,6 +1546,12 @@ func (m *manager) runSchemaPhase(ctx context.Context, phase, targetSHA string) (
 	engineEnv, err := m.engineChildEnvironment(m.repoRoot)
 	if err != nil {
 		return nil, err
+	}
+	if snapshot != "" {
+		if _, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false); err != nil {
+			return nil, err
+		}
+		engineEnv = append(engineEnv, "BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE="+snapshot)
 	}
 	engineEnv = append(engineEnv,
 		"/usr/bin/bash", enginePath,
@@ -1347,21 +1583,43 @@ func (m *manager) engineChildEnvironment(gitRoot string) ([]string, error) {
 	), nil
 }
 
-func (m *manager) promoteCandidate(ctx context.Context, targetSHA string) (map[string]any, error) {
+func (m *manager) promoteCandidate(ctx context.Context, targetSHA, snapshot string) (map[string]any, error) {
 	if !shaPattern.MatchString(targetSHA) {
 		return nil, errors.New("target_sha is required and must be a lowercase commit SHA")
 	}
 	reconciler := filepath.Join(m.repoRoot, "Data", "Engine", "K3s", "cluster", "reconcile-node-workloads.py")
 	imageManifest := filepath.Join(m.repoRoot, "Engine", "Deploy", "image-manifest.json")
+	if snapshot != "" {
+		manifest, err := m.developmentMemberManifest(ctx, snapshot, targetSHA, false)
+		if err != nil {
+			return nil, err
+		}
+		_, bootstrap, err := developmentHelperManifest(snapshot, targetSHA)
+		if err != nil {
+			return nil, err
+		}
+		if err := verifyServingDevelopmentHelper("/proc/self/exe", "/usr/local/sbin/borealis-node-manager", defaultRevisionPath, bootstrap.ManagerSHA256(), targetSHA); err != nil {
+			return nil, err
+		}
+		imageManifest = manifest
+	}
 	if info, err := os.Stat(reconciler); err != nil || !info.Mode().IsRegular() {
 		return nil, errors.New("cluster workload reconciler is unavailable")
 	}
-	output, err := run(ctx, m.repoRoot, "/usr/bin/python3", reconciler,
-		"--node", m.nodeName,
-		"--revision", targetSHA,
-		"--image-manifest", imageManifest,
-		"--promote-candidate",
-	)
+	var output string
+	promote := func() error {
+		var err error
+		output, err = run(ctx, m.repoRoot, "/usr/bin/python3", reconciler,
+			"--node", m.nodeName, "--revision", targetSHA,
+			"--image-manifest", imageManifest, "--promote-candidate")
+		return err
+	}
+	var err error
+	if snapshot == "" {
+		err = promote()
+	} else {
+		err = promoteDevelopmentGeneration(ctx, filepath.Join(m.repoRoot, "Engine", "Deploy"), imageManifest, promote)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -2024,6 +2282,9 @@ func installLocalNodeManagerService(repoRoot string) error {
 	if err := os.Chown(defaultSecretPath, 0, actionRuntimeID); err != nil {
 		return err
 	}
+	if err := ensureBootstrapMutationRoot("/var/lib"); err != nil {
+		return err
+	}
 	// systemd requires every ReadWritePaths target to exist before ExecStart.
 	// K3s creates this leaf lazily, so joining nodes must create it explicitly.
 	if err := os.MkdirAll(k3sImageImportPath, 0o755); err != nil {
@@ -2057,6 +2318,57 @@ func installLocalNodeManagerService(repoRoot string) error {
 		return errors.New("joined node-manager revision is unavailable")
 	}
 	return replaceSecureConfig(defaultRevisionPath, []byte(strings.ToLower(strings.TrimSpace(revision))+"\n"))
+}
+
+func ensureBootstrapMutationRoot(base string) error {
+	root, err := os.OpenRoot(base)
+	if err != nil {
+		return err
+	}
+	defer root.Close()
+	if err := root.Mkdir("borealis", 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	parent, err := root.Lstat("borealis")
+	if err != nil || !parent.IsDir() || parent.Mode()&os.ModeSymlink != 0 || parent.Mode().Perm()&0o022 != 0 {
+		return errors.New("bootstrap journal parent must be a private root-owned directory")
+	}
+	owner, ok := parent.Sys().(*syscall.Stat_t)
+	if !ok || int(owner.Uid) != os.Geteuid() {
+		return errors.New("bootstrap journal parent must be a private root-owned directory")
+	}
+	borealis, err := root.OpenRoot("borealis")
+	if err != nil {
+		return err
+	}
+	defer borealis.Close()
+	if err := borealis.Mkdir("cluster-bootstrap", 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return err
+	}
+	journal, err := borealis.Lstat("cluster-bootstrap")
+	if err != nil || !journal.IsDir() || journal.Mode()&os.ModeSymlink != 0 || journal.Mode().Perm() != 0o700 {
+		return errors.New("bootstrap journal must be a root-owned mode0700 directory")
+	}
+	owner, ok = journal.Sys().(*syscall.Stat_t)
+	if !ok || int(owner.Uid) != os.Geteuid() {
+		return errors.New("bootstrap journal must be a root-owned mode0700 directory")
+	}
+	parentDirectory, err := root.Open("borealis")
+	if err != nil {
+		return err
+	}
+	defer parentDirectory.Close()
+	journalDirectory, err := borealis.Open("cluster-bootstrap")
+	if err != nil {
+		return err
+	}
+	defer journalDirectory.Close()
+	baseDirectory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer baseDirectory.Close()
+	return errors.Join(baseDirectory.Sync(), parentDirectory.Sync(), journalDirectory.Sync())
 }
 
 func replaceExecutable(destination string, content []byte) error {
@@ -2171,11 +2483,23 @@ func normalizeRemote(value string) string {
 }
 
 func run(ctx context.Context, workdir, binary string, args ...string) (string, error) {
-	command := exec.CommandContext(ctx, binary, args...)
-	if workdir != "" {
-		command.Dir = workdir
+	if err := checkPreparedAdmissionCommand(ctx); err != nil {
+		return "", err
 	}
-	output, err := command.CombinedOutput()
+	var output []byte
+	var err error
+	if _, guarded := ctx.Value(preparedAdmissionCheckKey{}).(func(context.Context) error); guarded {
+		output, err = runPreparedAdmissionCommand(ctx, workdir, binary, args...)
+	} else {
+		command := exec.CommandContext(ctx, binary, args...)
+		if workdir != "" {
+			command.Dir = workdir
+		}
+		output, err = command.CombinedOutput()
+	}
+	if guardErr := checkPreparedAdmissionCommand(ctx); guardErr != nil {
+		return "", guardErr
+	}
 	if err != nil {
 		return string(output), fmt.Errorf("%s failed: %w: %s", filepath.Base(binary), err, truncateDiagnostic(strings.TrimSpace(string(output)), 2048))
 	}

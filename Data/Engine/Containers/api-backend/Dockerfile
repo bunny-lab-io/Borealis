@@ -20,7 +20,7 @@ COPY Data/Engine/Containers/api-backend/dist/borealis-cluster-controller /usr/lo
 COPY Data/Engine/Containers/api-backend/dist/borealis-node-manager /usr/local/bin/borealis-node-manager
 COPY Data/Engine/Containers/api-backend/entrypoint.sh /usr/local/bin/borealis-api-backend
 
-RUN chmod +x /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-cluster-controller /usr/local/bin/borealis-node-manager /usr/local/bin/borealis-api-backend
+RUN chmod 0755 /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-cluster-controller /usr/local/bin/borealis-node-manager /usr/local/bin/borealis-api-backend
 
 EXPOSE 5000
 

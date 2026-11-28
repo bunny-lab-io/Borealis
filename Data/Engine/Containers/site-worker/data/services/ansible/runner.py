@@ -169,6 +169,7 @@ class EngineAnsibleRunner:
         scheduled_run_id: Optional[int] = None,
         scheduled_job_run_row_id: Optional[int] = None,
         connection: str = "local",
+        worker_admission: Optional[tuple] = None,
     ) -> str:
         run_id = uuid.uuid4().hex
         worker = threading.Thread(
@@ -191,6 +192,7 @@ class EngineAnsibleRunner:
                 "scheduled_run_id": scheduled_run_id,
                 "scheduled_job_run_row_id": scheduled_job_run_row_id,
                 "connection": connection,
+                "worker_admission": worker_admission,
             },
             name=f"ansible-run-{run_id[:12]}",
             daemon=True,
@@ -199,8 +201,12 @@ class EngineAnsibleRunner:
         return run_id
 
     def _run_playbook_with_slot(self, **kwargs: Any) -> None:
+        admission = kwargs.pop("worker_admission", None)
         with self._run_slots:
-            self._run_playbook(**kwargs)
+            terminal = self._run_playbook(**kwargs)
+            if admission is not None and terminal is not None:
+                owner, ticket = admission
+                owner.complete_local(ticket, status="Completed" if terminal == RUN_STATUS_SUCCESS else "Failed")
 
     # ------------------------------------------------------------------
     # Path helpers
@@ -800,7 +806,7 @@ class EngineAnsibleRunner:
         scheduled_run_id: Optional[int],
         scheduled_job_run_row_id: Optional[int],
         connection: str,
-    ) -> None:
+    ) -> Optional[str]:
         start_ts = _now_ts()
         effective_run_row_id = scheduled_job_run_row_id if scheduled_job_run_row_id is not None else scheduled_run_id
         self._record_recap_start(
@@ -984,3 +990,6 @@ class EngineAnsibleRunner:
                         workspace.get("control_path_dir"),
                         exc_info=True,
                     )
+        # Timeout/error alone is not termination. Keep uncertain ownership if
+        # the actual child still exists after the existing cleanup path.
+        return status if process is None or process.poll() is not None else None

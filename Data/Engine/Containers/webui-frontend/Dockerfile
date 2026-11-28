@@ -1,7 +1,10 @@
+FROM scratch AS borealis-npm-seed
+
 FROM node:22-alpine AS deps
 
 ARG BOREALIS_ENGINE_RUNTIME_UID=64646
 ARG BOREALIS_ENGINE_RUNTIME_GID=64646
+ARG NPM_CONFIG_OFFLINE=false
 
 ENV NODE_ENV=development
 
@@ -11,7 +14,9 @@ RUN addgroup -S -g "${BOREALIS_ENGINE_RUNTIME_GID}" borealis-engine \
 WORKDIR /opt/Borealis/Data/Engine/web-interface
 
 COPY data/web-interface/package.json data/web-interface/package-lock.json /opt/Borealis/Data/Engine/web-interface/
-RUN npm ci --include=dev --no-fund --audit=false
+RUN --mount=type=bind,from=borealis-npm-seed,target=/root/.npm,rw \
+    npm ci --include=dev --no-fund --audit=false \
+    && mkdir -p node_modules/.vite-temp
 
 FROM deps AS source
 
@@ -23,7 +28,7 @@ COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
 COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
 COPY static-server.js /usr/local/bin/borealis-webui-static-server.js
 
-RUN chmod +x \
+RUN chmod 0755 \
     /usr/local/bin/borealis-webui-frontend \
     /usr/local/bin/borealis-webui-healthcheck \
     /usr/local/bin/borealis-webui-static-server.js
@@ -32,9 +37,15 @@ EXPOSE 8000
 
 ENTRYPOINT ["/usr/local/bin/borealis-webui-frontend"]
 
-FROM source AS build
+FROM node:22-alpine AS build
 
-RUN NODE_ENV=production npm run build
+WORKDIR /opt/Borealis/Data/Engine/web-interface
+COPY data/web-interface ./
+# The native snapshotter would copy the entire dependency tree for each
+# writable step. The production compiler only needs to read that tree.
+RUN --mount=type=bind,from=deps,source=/opt/Borealis/Data/Engine/web-interface/node_modules,target=/opt/Borealis/Data/Engine/web-interface/node_modules \
+    --mount=type=tmpfs,target=/opt/Borealis/Data/Engine/web-interface/node_modules/.vite-temp,size=8m \
+    NODE_ENV=production npm run build
 
 FROM node:22-alpine AS prod
 
@@ -53,7 +64,7 @@ COPY entrypoint.sh /usr/local/bin/borealis-webui-frontend
 COPY healthcheck.js /usr/local/bin/borealis-webui-healthcheck
 COPY static-server.js /usr/local/bin/borealis-webui-static-server.js
 
-RUN chmod +x \
+RUN chmod 0755 \
     /usr/local/bin/borealis-webui-frontend \
     /usr/local/bin/borealis-webui-healthcheck \
     /usr/local/bin/borealis-webui-static-server.js

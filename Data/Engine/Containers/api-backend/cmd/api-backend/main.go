@@ -1,6 +1,7 @@
 package main
 
 import (
+	"borealis/api-backend/internal/clusterbootstrap"
 	"context"
 	"encoding/json"
 	"errors"
@@ -43,6 +44,26 @@ func main() {
 	rootCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 
+	if clusterbootstrap.IsPairExecutor() {
+		if len(os.Args) == 2 && os.Args[1] == "pair-recovery-check" {
+			ctx, cancel := context.WithTimeout(rootCtx, 10*time.Second)
+			defer cancel()
+			if err := checkPairRecoveryDeployment(ctx, cfg, os.Stdout); err != nil {
+				log.Fatalf("stopped pair proof rejected: %v", err)
+			}
+			return
+		}
+		if len(os.Args) == 2 && os.Args[1] == "pair-recovery-worker" {
+			if err := runPairRecoveryWorker(rootCtx, cfg, os.Stdin); err != nil {
+				log.Fatalf("pair recovery worker: %v", err)
+			}
+			return
+		}
+		if !clusterControllerMode() {
+			log.Fatal("pair executor requires recovery worker or original controller mode")
+		}
+	}
+
 	if apiHealthcheckMode() {
 		if err := runGoAPIHealthcheck(rootCtx, cfg); err != nil {
 			log.Printf("Go api-backend healthcheck failed: %v", err)
@@ -52,6 +73,9 @@ func main() {
 	}
 
 	if apiDBHealthcheckMode() {
+		if err := holdProcessIdentityConsumer(cfg); err != nil {
+			log.Fatalf("identity consumer startup blocked: %v", err)
+		}
 		if err := runGoAPIDBHealthcheck(rootCtx, cfg); err != nil {
 			log.Printf("Go api-backend DB healthcheck failed: %v", err)
 			os.Exit(1)
@@ -94,6 +118,11 @@ func main() {
 		return
 	}
 
+	// Both API and scheduler can retain session/signing keys. Acquire before
+	// their first key read; controller/operator and HTTP-only probes do not.
+	if err := holdProcessIdentityConsumer(cfg); err != nil {
+		log.Fatalf("identity consumer startup blocked: %v", err)
+	}
 	if schedulerManagerMode() {
 		if err := runGoJobSchedulerManager(rootCtx, cfg); err != nil {
 			log.Fatalf("Go job-scheduler manager exited: %v", err)
@@ -173,10 +202,18 @@ func main() {
 	registerInternalSchedulerRoutes(mux, auth, vpnRuntime, fallback)
 	registerActivityRoutes(mux, auth)
 	mux.Handle("/", fallback)
+	stopSSHInspections := func() {}
+	stopSSHIdentityRecovery := func() {}
+	stopExistingIdentityInspection := func() {}
+	stopExistingIdentityRecovery := func() {}
 	if apiBackgroundLoopsEnabled() {
 		vpnRuntime.startClusterPeerReconciler(rootCtx)
 		startGoWatchdogRuntime(rootCtx, auth, operatorRealtime)
 		startServerLogRetentionRuntime(rootCtx)
+		stopSSHInspections = startClusterSSHInspectionRuntime(rootCtx, auth)
+		stopSSHIdentityRecovery = startClusterSSHIdentityRecoveryRuntime(rootCtx, auth)
+		stopExistingIdentityInspection = startClusterExistingIdentityInspectionRuntime(rootCtx, auth)
+		stopExistingIdentityRecovery = startClusterExistingIdentityRecoveryRuntime(rootCtx, auth)
 	} else {
 		log.Printf("Go api-backend background loops disabled")
 	}
@@ -221,6 +258,11 @@ func main() {
 		}
 	}
 
+	// Cancel and join SSH work before Aegis listeners or database pool close.
+	stopExistingIdentityRecovery()
+	stopExistingIdentityInspection()
+	stopSSHIdentityRecovery()
+	stopSSHInspections()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), cfg.ShutdownTimeout)
 	defer cancel()
 	if err := server.Shutdown(shutdownCtx); err != nil {

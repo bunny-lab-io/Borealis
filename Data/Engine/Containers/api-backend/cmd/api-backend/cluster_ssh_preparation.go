@@ -1,0 +1,171 @@
+package main
+
+import (
+	"borealis/api-backend/internal/clusterbootstrap"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"sort"
+	"time"
+)
+
+// The inspection claim cannot authorize preparation. The separate controller
+// claim consumes a persisted preparation reservation; its approval transition
+// and preparation dispatcher remain disabled.
+const clusterSSHPreparationOperationStep = "prepare_ssh_targets"
+
+// buildClusterSSHPreparationExpected binds source configuration to the exact
+// planned cohort, fresh stage_source worker generation and inspected host.
+// Pod/service CIDRs come from a fixed source observer, never installer defaults.
+// Caller must compare baseline and all observations under current authority.
+func buildClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string, payload ...string) (clusterbootstrap.PreparationExpected, error) {
+	fail := func() (clusterbootstrap.PreparationExpected, error) {
+		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
+	}
+	if baseline.Validate() != nil || validateClusterSSHInspectionCohort(cohort, source) != nil ||
+		lease.ControllerHolder != cohort.ControllerHolder || lease.OperationID != cohort.OperationID || lease.OperationAttempt != cohort.Attempt ||
+		!validClusterSSHObservationLease(lease) {
+		return fail()
+	}
+	return assembleClusterSSHPreparationExpected(cohort, source, lease, baseline, k3sVersion, podCIDR, serviceCIDR, payload...)
+}
+
+// Value assembly only. Callers must independently establish their exact phase
+// and current lease authority; this helper does not accept or create authority.
+func assembleClusterSSHPreparationExpected(cohort clusterSSHInspectionCohort, source clusterSSHSourceCohort, lease clusterSSHTargetLease,
+	baseline clusterbootstrap.Expected, k3sVersion, podCIDR, serviceCIDR string, payload ...string) (clusterbootstrap.PreparationExpected, error) {
+	fail := func() (clusterbootstrap.PreparationExpected, error) {
+		return clusterbootstrap.PreparationExpected{}, clusterbootstrap.ErrPreparationConfig
+	}
+	peers := make([]string, 0, 3)
+	for _, member := range source.Members {
+		peers = append(peers, member.Address)
+	}
+	for _, target := range cohort.Targets {
+		peers = append(peers, target.Binding.Address)
+	}
+	sort.Strings(peers)
+	// Bind every original report, approved wire key and source member identity.
+	// Only the read's clock advances; inspected_at remains part of the proof.
+	stableCohort := cohort
+	stableCohort.ObservedAt = 0
+	inputSource := source
+	if clusterbootstrap.IsPairExecutor() {
+		if len(payload) != 1 {
+			return fail()
+		}
+		var err error
+		inputSource, err = pairSourceBoot(payload[0], source, false)
+		if err != nil {
+			return fail()
+		}
+	}
+	raw, err := json.Marshal(clusterSSHParentProof{Version: 1, Cohort: stableCohort, Source: inputSource})
+	if err != nil || len(raw) > 128<<10 {
+		return fail()
+	}
+	digest := sha256.Sum256(raw)
+	for _, target := range cohort.Targets {
+		if target.Binding.TargetID != lease.TargetID {
+			continue
+		}
+		if lease.Generation <= target.Generation {
+			return fail()
+		}
+		binding := clusterbootstrap.SessionBinding{ClusterID: source.ClusterID, OperationID: cohort.OperationID, TargetID: target.Binding.TargetID,
+			HolderID: lease.Holder, Generation: lease.Generation, OperationAttempt: cohort.Attempt, Address: target.Binding.Address, Port: target.Binding.Port,
+			Hostname: target.Report.Hostname, MachineID: target.Report.MachineID, HostKeyAlgorithm: target.Key.Algorithm, HostKeyFingerprint: target.Key.Fingerprint}
+		expected := clusterbootstrap.PreparationExpected{Source: baseline, Target: binding, TargetBootID: target.Report.BootID, KubeSystemUID: source.KubeSystemUID,
+			CohortSHA256:    hex.EncodeToString(digest[:]),
+			ControlPlaneVIP: source.ControlPlaneVIP, EdgeVIP: source.EdgeVIP, ManagementCIDR: target.Report.ConnectedPrefix, K3sVersion: k3sVersion,
+			PodCIDR: podCIDR, ServiceCIDR: serviceCIDR, PeerAddresses: peers}
+		if len(payload) > 1 {
+			return fail()
+		}
+		if len(payload) == 1 {
+			expected.TargetCPU, err = clusterSSHPreparationExpectedCPU(payload[0], target.Binding.TargetID)
+			if err != nil || expected.TargetCPU != nil && (expected.TargetCPU.AllocatableMilli != uint64(target.Report.CPUCount)*1000 || expected.TargetCPU.MemoryKiB != target.Report.MemoryKiB) {
+				return fail()
+			}
+			expected.TargetPackages, err = clusterSSHPreparationExpectedPackages(payload[0], target.Binding.TargetID)
+			if err != nil {
+				return fail()
+			}
+		}
+		if expected.Validate() != nil {
+			return fail()
+		}
+		return expected, nil
+	}
+	return fail()
+}
+
+// prepareClusterSSHTargetInputs joins immutable archive verification with the
+// private pre-join configuration contract. Runtime contains only explicit
+// shared settings selected by the source reader, never arbitrary environment.
+// read must freshly verify source, cohort, Aegis and exact target claim each
+// time, then return current binding/settings after releasing its DB connection.
+// The assembler compares the complete canonical configuration across reads.
+// No callback invokes SSH or starts a host mutation. The guarded source reader,
+// qualification transition and remote dispatcher remain separate integration.
+type clusterSSHPreparationRead func(context.Context) (clusterbootstrap.PreparationExpected, map[string]string, error)
+
+// The bundle remains private until the caller verifies the current source and
+// configuration at handoff. Every local byte check still requires a live claim.
+func prepareClusterSSHTargetInputs(parent context.Context, expected clusterbootstrap.PreparationExpected,
+	config *clusterbootstrap.PreparationConfiguration, scratchParent string, check func(context.Context) error,
+	download func(context.Context, clusterbootstrap.Expected, string) (*clusterbootstrap.Bundle, error)) (*clusterbootstrap.PreparationInputs, error) {
+	if expected.Validate() != nil || config == nil || check == nil || download == nil {
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Minute)
+	defer cancel()
+	if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
+		return nil, clusterbootstrap.ErrSessionAuthority
+	}
+	bundle, err := download(ctx, expected.Source, scratchParent)
+	if err != nil {
+		if bundle != nil {
+			_ = bundle.Close()
+		}
+		return nil, clusterbootstrap.ErrPreparationConfig
+	}
+	if ctx.Err() != nil || check(ctx) != nil || ctx.Err() != nil {
+		if bundle != nil {
+			_ = bundle.Close()
+		}
+		return nil, clusterbootstrap.ErrSessionAuthority
+	}
+	inputs, err := clusterbootstrap.BindPreparationInputs(ctx, bundle, config, check)
+	if err != nil {
+		if bundle != nil {
+			_ = bundle.Close()
+		}
+		return nil, err
+	}
+	return inputs, nil
+}
+
+func newClusterSSHPreparationInputCheck(config *clusterbootstrap.PreparationConfiguration, read clusterSSHPreparationRead) func(context.Context) error {
+	originalDigest, originalErr := config.Digest()
+	return func(ctx context.Context) error {
+		if originalErr != nil || read == nil || ctx.Err() != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		current, settings, err := read(ctx)
+		if err != nil || ctx.Err() != nil {
+			return clusterbootstrap.ErrSessionAuthority
+		}
+		observed, err := clusterbootstrap.NewPreparationConfiguration(current, settings)
+		if err != nil {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		digest, err := observed.Digest()
+		if err != nil || digest != originalDigest {
+			return clusterbootstrap.ErrPreparationConfig
+		}
+		return nil
+	}
+}

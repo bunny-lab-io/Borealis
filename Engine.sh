@@ -5,6 +5,13 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
+# System services can start without HOME. Keep client caches outside the source checkout.
+if [[ -z "${HOME:-}" ]]; then
+  HOME="$(getent passwd "${EUID}" | cut -d: -f6)"
+  [[ "${HOME}" == /* && -d "${HOME}" ]] || { printf 'Cannot resolve installer account home.\n' >&2; exit 1; }
+  export HOME
+fi
+
 if [[ -n "${BASH_SOURCE[0]:-}" && -f "${BASH_SOURCE[0]}" ]]; then
   SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 else
@@ -29,6 +36,11 @@ RUNTIME_ENV="${DEPLOY_DIR}/runtime.env"
 WEBUI_ENV="${DEPLOY_DIR}/webui-frontend.env"
 IMAGE_MANIFEST="${DEPLOY_DIR}/image-manifest.json"
 CLUSTER_STAGED_REVISION_FILE="${DEPLOY_DIR}/cluster-staged-revision"
+if [[ -n "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+  [[ "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}" =~ ^dev-[0-9a-f]{64}$ ]] || exit 2
+  IMAGE_MANIFEST="/etc/borealis/image-manifest-${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}.json"
+  CLUSTER_STAGED_REVISION_FILE="/etc/borealis/staged-${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}"
+fi
 DEPLOY_MANIFEST="${DEPLOY_DIR}/deploy-manifest.json"
 BUILD_LOG="${DEPLOY_DIR}/build.log"
 K3S_NAMESPACE="${BOREALIS_K3S_NAMESPACE:-borealis}"
@@ -2126,7 +2138,7 @@ sync_and_reexec_if_needed() {
 
   sync_repo
   log "Launching ${INSTALL_DIR}/Engine.sh ${LAUNCH_ARGS[*]:-deploy}."
-  if [[ ! -t 0 && -r /dev/tty ]]; then
+  if [[ ! -t 0 ]] && ( : </dev/tty ) 2>/dev/null; then
     exec "${INSTALL_DIR}/Engine.sh" "${LAUNCH_ARGS[@]}" < /dev/tty
   fi
   exec "${INSTALL_DIR}/Engine.sh" "${LAUNCH_ARGS[@]}"
@@ -2632,24 +2644,29 @@ CLUSTER_CIDR="${BOREALIS_K3S_CLUSTER_CIDR:-10.42.0.0/16}"
 SERVICE_CIDR="${BOREALIS_K3S_SERVICE_CIDR:-10.43.0.0/16}"
 PEER_CIDRS="${BOREALIS_K3S_PEER_CIDRS:-}"
 
-iptables -N "${CHAIN}" 2>/dev/null || true
-iptables -F "${CHAIN}"
-iptables -A "${CHAIN}" -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT
-iptables -A "${CHAIN}" -i lo -j ACCEPT
-iptables -A "${CHAIN}" -s 127.0.0.0/8 -j ACCEPT
-for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
-  iptables -A "${CHAIN}" -i cni+ -s "${cidr}" -j ACCEPT
-  iptables -A "${CHAIN}" -i flannel+ -s "${cidr}" -j ACCEPT
-done
-if [ -n "${PEER_CIDRS}" ]; then
-  old_ifs="${IFS}"
-  IFS=','
-  for cidr in ${PEER_CIDRS}; do
-    iptables -A "${CHAIN}" -s "${cidr}" -j ACCEPT
+# Restore changes only this chain in one commit. Existing jumps never observe
+# an empty allowlist during a retry; unrelated chains/rules remain untouched.
+case "${PORT}" in ''|*[!0-9]*) exit 1 ;; esac
+case "${CLUSTER_CIDR},${SERVICE_CIDR},${PEER_CIDRS}" in *[!0-9.,/]*) exit 1 ;; esac
+{
+  printf '*filter\n:%s - [0:0]\n' "${CHAIN}"
+  printf '%s\n' "-A ${CHAIN} -m conntrack --ctstate ESTABLISHED,RELATED -j ACCEPT"
+  printf '%s\n' "-A ${CHAIN} -i lo -j ACCEPT"
+  printf '%s\n' "-A ${CHAIN} -s 127.0.0.0/8 -j ACCEPT"
+  for cidr in "${CLUSTER_CIDR}" "${SERVICE_CIDR}"; do
+    printf '%s\n' "-A ${CHAIN} -i cni+ -s ${cidr} -j ACCEPT"
+    printf '%s\n' "-A ${CHAIN} -i flannel+ -s ${cidr} -j ACCEPT"
   done
-  IFS="${old_ifs}"
-fi
-iptables -A "${CHAIN}" -j DROP
+  if [ -n "${PEER_CIDRS}" ]; then
+    old_ifs="${IFS}"
+    IFS=','
+    for cidr in ${PEER_CIDRS}; do
+      printf '%s\n' "-A ${CHAIN} -s ${cidr} -j ACCEPT"
+    done
+    IFS="${old_ifs}"
+  fi
+  printf '%s\n' "-A ${CHAIN} -j DROP" COMMIT
+} | iptables-restore --noflush --wait 5
 
 if ! iptables -C INPUT -p tcp --dport "${PORT}" -j "${CHAIN}" 2>/dev/null; then
   iptables -I INPUT 1 -p tcp --dport "${PORT}" -j "${CHAIN}"
@@ -2977,6 +2994,7 @@ ensure_k3s_cluster_baseline() {
   verify_k3s_kubeconfig
   wait_for_k3s_nodes_ready
   verify_k3s_container_runtime
+  run_privileged python3 -I "${SCRIPT_DIR}/Data/Engine/K3s/apparmor/ensure_profiles.py" "${SCRIPT_DIR}" "$(k3s_binary_path)"
   verify_k3s_packaged_ingress_disabled
   ensure_k3s_namespace
   label_k3s_nodes
@@ -3166,6 +3184,31 @@ classify_longhorn_multipath_maps() {
   done
 }
 
+longhorn_multipath_unit_is_quiescent() {
+  local unit="$1"
+  local active file_state dependencies
+  active="$(run_privileged systemctl show "${unit}" --property=ActiveState --value)" \
+    || die "Cannot inspect ${unit} activity before Longhorn reconcile."
+  [[ -n "${active}" ]] || die "Missing ${unit} activity before Longhorn reconcile."
+  [[ "${active}" == "inactive" ]] || return 1
+  file_state="$(run_privileged systemctl show "${unit}" --property=UnitFileState --value)" \
+    || die "Cannot inspect ${unit} enablement before Longhorn reconcile."
+  [[ -n "${file_state}" ]] || die "Missing ${unit} enablement before Longhorn reconcile."
+  case "${file_state}" in
+    disabled|masked|masked-runtime) return 0 ;;
+    static)
+      [[ "${unit}" == "multipathd.socket" ]] || return 1
+      # Ubuntu can ship the socket without an installation target. Prove
+      # that no loaded unit pulls it in before treating it as quiescent.
+      dependencies="$(run_privileged systemctl show "${unit}" --value \
+        --property=WantedBy --property=RequiredBy --property=BoundBy --property=UpheldBy)" \
+        || die "Cannot inspect activation dependencies for ${unit}."
+      [[ -z "${dependencies}" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_longhorn_multipath_compatibility() {
   local -a multipath_units=()
   local unit=""
@@ -3178,8 +3221,7 @@ ensure_longhorn_multipath_compatibility() {
 
   local enabled_or_active=0
   for unit in "${multipath_units[@]}"; do
-    if run_privileged systemctl is-active --quiet "${unit}" 2>/dev/null \
-      || run_privileged systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
+    if ! longhorn_multipath_unit_is_quiescent "${unit}"; then
       enabled_or_active=1
     fi
   done
@@ -3210,9 +3252,8 @@ ensure_longhorn_multipath_compatibility() {
     fi
   done
   for unit in "${multipath_units[@]}"; do
-    if run_privileged systemctl is-active --quiet "${unit}" 2>/dev/null \
-      || run_privileged systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
-      die "${unit} remained active or enabled after Longhorn multipath safety reconcile."
+    if ! longhorn_multipath_unit_is_quiescent "${unit}"; then
+      die "${unit} did not reach a quiescent state after Longhorn multipath safety reconcile."
     fi
   done
   mapfile -t longhorn_maps < <(classify_longhorn_multipath_maps "longhorn")
@@ -3829,6 +3870,37 @@ generic_k3s_workload_replicas() {
   printf '1\n'
 }
 
+# This private producer has no missing-value defaults. Validate before the
+# generic formatters, which otherwise trim input, round CPU or supply defaults.
+borealis_site_worker_resource_limit() {
+  local kind="$1" key="BOREALIS_SITE_WORKER_${1}_LIMIT" raw count number factor
+  count="$(awk -F= -v key="${key}" '$1 == key { n++ } END { print n+0 }' "${COMPOSE_ENV}")" || return 1
+  [[ "${count}" == 1 ]] || { printf 'Missing or duplicate site-worker resource setting: %s\n' "${key}" >&2; return 1; }
+  raw="$(read_env_value "${key}")"
+  case "${kind}" in
+    CPU)
+      [[ "${raw}" =~ ^(0|[1-9][0-9]{0,8})(\.[0-9]{1,3})?m?$ && ! "${raw}" =~ \..*m$ ]] || return 1
+      raw="$(format_k3s_cpu_quantity "${raw}")" || return 1
+      [[ "${raw}" =~ ^[1-9][0-9]{0,8}m$ ]] || return 1
+      ;;
+    MEMORY)
+      [[ "${raw}" =~ ^([1-9][0-9]{0,8})(Ki|Mi|Gi|Ti|[kKmMgGT])$ ]] || return 1
+      number="${BASH_REMATCH[1]}"
+      case "${BASH_REMATCH[2]}" in
+        k|K|Ki) factor=1024 ;; m|M|Mi) factor=1048576 ;;
+        g|G|Gi) factor=1073741824 ;; Ti) factor=1099511627776 ;; T) factor=1000000000000 ;;
+      esac
+      (( number <= 9007199254740991 / factor )) || return 1
+      raw="$(format_k3s_memory_quantity "${raw}")" || return 1
+      ;;
+    PIDS)
+      [[ "${raw}" =~ ^[1-9][0-9]{0,8}$ ]] || return 1
+      ;;
+    *) return 1 ;;
+  esac
+  printf '%s\n' "${raw}"
+}
+
 render_borealis_operator_manifest() {
   local image="$1"
   local secret="$2"
@@ -3840,6 +3912,10 @@ render_borealis_operator_manifest() {
   local runtime_uid
   local runtime_gid
   local replicas
+  local worker_cpu_limit worker_memory_limit worker_pids_limit
+  worker_cpu_limit="$(borealis_site_worker_resource_limit CPU)" || return 1
+  worker_memory_limit="$(borealis_site_worker_resource_limit MEMORY)" || return 1
+  worker_pids_limit="$(borealis_site_worker_resource_limit PIDS)" || return 1
   secret_b64="$(base64_inline "${secret}")"
   runtime_uid="$(resolve_runtime_owner_uid)"
   runtime_gid="$(resolve_runtime_owner_gid)"
@@ -4033,6 +4109,12 @@ $(k3s_timezone_env_entries)
               value: "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}"
             - name: BOREALIS_SITE_WORKER_RUNTIME_CONFIG_HASH
               value: "${site_worker_runtime_secret_hash}"
+            - name: BOREALIS_SITE_WORKER_CPU_LIMIT
+              value: "${worker_cpu_limit}"
+            - name: BOREALIS_SITE_WORKER_MEMORY_LIMIT
+              value: "${worker_memory_limit}"
+            - name: BOREALIS_SITE_WORKER_PIDS_LIMIT
+              value: "${worker_pids_limit}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_UID
               value: "${runtime_uid}"
             - name: BOREALIS_ENGINE_RUNTIME_OWNER_GID
@@ -4140,8 +4222,10 @@ ensure_borealis_operator_bridge() {
   workload_image_allowlist="$(borealis_operator_workload_image_allowlist)"
   site_worker_image_allowlist="$(borealis_operator_site_worker_image_allowlist)"
   site_worker_runtime_secret_hash="$(borealis_site_worker_runtime_secret_hash)"
+  local worker_resource_limits
+  worker_resource_limits="$(borealis_site_worker_resource_limit CPU && borealis_site_worker_resource_limit MEMORY && borealis_site_worker_resource_limit PIDS)" || die "Effective site-worker resource settings unavailable."
   local config_hash
-  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${ENGINE_HOST_ROOT}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" | sha256sum | awk '{print $1}')"
+  config_hash="$(printf '%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n%s\n' "${image}" "${K3S_NAMESPACE}" "${BOREALIS_OPERATOR_SERVICE_NAME}" "${BOREALIS_OPERATOR_PORT}" "${secret}" "${workload_image_allowlist}" "${site_worker_image_allowlist}" "${BOREALIS_SITE_WORKER_RUNTIME_SECRET_NAME}" "${site_worker_runtime_secret_hash}" "${ENGINE_HOST_ROOT}" "$(host_timezone_value)" "timezone-host-mounts-v1" "operator-rbac-controller-v2" "${worker_resource_limits}" | sha256sum | awk '{print $1}')"
 
   import_borealis_operator_image_into_k3s "${image}"
   if [[ -n "${site_worker_image_allowlist}" ]]; then
@@ -4265,6 +4349,7 @@ render_k3s_api_backend_bridge_manifest() {
   local source_sha="${10}"
   local probe_conformance="${11}"
   local k3s_version="${12}"
+  local development_catalog_enabled="${13:-false}"
   local service_host
   local replicas
   service_host="$(api_backend_service_dns_name)"
@@ -4407,6 +4492,8 @@ spec:
                 name: ${BOREALIS_API_BACKEND_RUNTIME_SECRET_NAME}
           env:
 $(k3s_timezone_env_entries)
+            - name: BOREALIS_CLUSTER_SCRATCH_DIR
+              value: /var/tmp/borealis-cluster
             - name: BOREALIS_GO_API_HOST
               value: "0.0.0.0"
             - name: BOREALIS_GO_API_PORT
@@ -4427,6 +4514,8 @@ $(k3s_timezone_env_entries)
               value: "${k3s_version}"
             - name: BOREALIS_K3S_UPGRADE_IMAGE
               value: "${K3S_UPGRADE_IMAGE}"
+            - name: BOREALIS_DEVELOPMENT_CATALOG_ENABLED
+              value: "${development_catalog_enabled}"
             - name: BOREALIS_ENGINE_RELEASE_VERSION
               value: "${release_version}"
             - name: BOREALIS_ENGINE_SOURCE_SHA
@@ -4435,6 +4524,14 @@ $(k3s_timezone_env_entries)
               valueFrom:
                 fieldRef:
                   fieldPath: spec.nodeName
+            - name: BOREALIS_ENGINE_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: BOREALIS_ENGINE_POD_UID
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.uid
             - name: BOREALIS_ENGINE_MANAGEMENT_IP
               valueFrom:
                 fieldRef:
@@ -4480,6 +4577,8 @@ $(k3s_timezone_env_entries)
             capabilities:
               drop: ["ALL"]
           volumeMounts:
+            - name: cluster-scratch
+              mountPath: /var/tmp/borealis-cluster
             - name: tmp
               mountPath: /tmp
 $(k3s_timezone_volume_mount_entries)
@@ -4510,6 +4609,8 @@ $(k3s_timezone_volume_mount_entries)
             - name: wireguard-secrets
               mountPath: /opt/Borealis/Engine/Services/wireguard-tunnel/secrets
       volumes:
+        - name: cluster-scratch
+          emptyDir: {}
         - name: tmp
           emptyDir:
             medium: Memory
@@ -4597,6 +4698,14 @@ ensure_k3s_api_backend_bridge() {
   traffic_owner="$(resolve_api_backend_traffic_owner)"
   service_host="$(api_backend_service_dns_name)"
   pids_limit="$(read_env_value BOREALIS_API_BACKEND_PIDS_LIMIT)"
+  local development_catalog_enabled=false
+  if [[ -f /etc/borealis/development-catalog.env ]]; then
+    development_catalog_enabled="$(python3 - "${K3S_CLUSTER_ASSET_DIR}/reconcile-node-workloads.py" <<'PYMARKER'
+import runpy, sys
+print(str(runpy.run_path(sys.argv[1])["development_catalog_enabled"]()).lower())
+PYMARKER
+)" || die "Invalid development catalog opt-in."
+  fi
   release_version="$(engine_release_version)"
   source_sha="$(git -C "${SCRIPT_DIR}" rev-parse HEAD 2>/dev/null || true)"
   probe_conformance="$(k3s_probe_conformance_status)"
@@ -4621,6 +4730,7 @@ ensure_k3s_api_backend_bridge() {
       "pids_limit=${pids_limit}" \
       "traffic_owner=${traffic_owner}" \
       "release_version=${release_version}" \
+      "development_catalog_enabled=${development_catalog_enabled}" \
       "source_sha=${source_sha}" \
       "probe_conformance=${probe_conformance}" \
       "k3s_version=${k3s_version}" \
@@ -4660,6 +4770,7 @@ ensure_k3s_api_backend_bridge() {
     "${source_sha}" \
     "${probe_conformance}" \
     "${k3s_version}" \
+    "${development_catalog_enabled}" \
     > "${manifest_file}"
   if ! k3s_kubectl apply -f "${manifest_file}" >> "${BUILD_LOG}" 2>&1; then
     rm -f "${manifest_file}"
@@ -7762,6 +7873,31 @@ apply_traefik_dynamic_config_permissions() {
   chmod 0775 "${dynamic_dir}" 2>/dev/null || true
 }
 
+ensure_traefik_acme_storage() {
+  # Traefik starts as root. Create the store first so the backup API can read it at 0600.
+  python3 -I - "$RUNTIME_ROOT/Services/traefik-edge/state" "$1" "$2" <<'PYTHON'
+import os
+import stat
+import sys
+
+directory, uid, gid = sys.argv[1:]
+parent = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    flags = os.O_RDONLY | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK
+    fd = os.open("acme.json", flags, 0o600, dir_fd=parent)
+    try:
+        state = os.fstat(fd)
+        if not stat.S_ISREG(state.st_mode) or state.st_nlink != 1:
+            raise SystemExit("ACME storage must be a regular file with a single link")
+        os.fchmod(fd, 0o600)
+        os.fchown(fd, int(uid), int(gid))
+    finally:
+        os.close(fd)
+finally:
+    os.close(parent)
+PYTHON
+}
+
 apply_runtime_service_ownership() {
   local owner_uid
   local owner_gid
@@ -7774,6 +7910,10 @@ apply_runtime_service_ownership() {
   [[ "${owner_uid}" =~ ^[0-9]+$ && "${owner_gid}" =~ ^[0-9]+$ ]] || return 0
   [[ "${postgres_uid}" =~ ^[0-9]+$ && "${postgres_gid}" =~ ^[0-9]+$ ]] || return 0
   [[ "${EUID:-$(id -u)}" -eq 0 ]] || return 0
+
+  if [[ -d "${RUNTIME_ROOT}/Services/traefik-edge/state" ]]; then
+    ensure_traefik_acme_storage "${owner_uid}" "${owner_gid}" || die "Could not prepare private Traefik ACME storage."
+  fi
 
   local path
   for path in \
@@ -7824,11 +7964,6 @@ apply_runtime_service_ownership() {
   chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/config/dynamic/core.yml" 2>/dev/null || true
   chmod 0664 "${RUNTIME_ROOT}/Services/traefik-edge/state/Settings.json" 2>/dev/null || true
   find "${RUNTIME_ROOT}/Services/traefik-edge/logs" -type f -exec chmod 0664 {} + 2>/dev/null || true
-  if [[ -e "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" ]]; then
-    # Keep Traefik ACME storage 0600 while allowing api-backend backup export to read it.
-    chown "${owner_uid}:${owner_gid}" "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
-    chmod 0600 "${RUNTIME_ROOT}/Services/traefik-edge/state/acme.json" 2>/dev/null || true
-  fi
 }
 
 apply_deploy_env_file_permissions() {
@@ -8789,6 +8924,21 @@ profile_name_for_rank() {
 load_profile_tuning() {
   local vcpu="$1"
   local mem_mib="$2"
+  local inherited_rank="${3-}"
+  local inherited_memory_mib="${4-}"
+  local tuning_memory_mib="${mem_mib}"
+  # These arguments come from the controller-supplied private configuration,
+  # never a joining host's independent profile choice.
+  PROFILE_CLUSTER_SIZING_RANK=""
+  PROFILE_CLUSTER_SIZING_MEMORY_MIB=""
+  if [[ -n "${inherited_rank}" || -n "${inherited_memory_mib}" ]]; then
+    [[ "${inherited_rank}" =~ ^[0-3]$ && "${inherited_memory_mib}" =~ ^[1-9][0-9]{0,8}$ ]] \
+      || die "Cluster sizing contract is missing or invalid."
+    [[ "${vcpu}" =~ ^[1-9][0-9]{0,8}$ && "${mem_mib}" =~ ^[1-9][0-9]{0,8}$ ]] \
+      || die "Cluster sizing requires valid observed CPU and memory capacity."
+    (( $(profile_rank_for_memory "${inherited_memory_mib}") >= inherited_rank )) \
+      || die "Cluster sizing memory does not support its recorded profile."
+  fi
   local cpu_rank
   local memory_rank
   local profile_rank
@@ -8797,6 +8947,15 @@ load_profile_tuning() {
   profile_rank="${cpu_rank}"
   if (( memory_rank < profile_rank )); then
     profile_rank="${memory_rank}"
+  fi
+
+  if [[ -n "${inherited_rank}" ]]; then
+    (( cpu_rank >= inherited_rank && memory_rank >= inherited_rank )) \
+      || die "Joining host capacity is below the cluster sizing profile."
+    profile_rank="${inherited_rank}"
+    tuning_memory_mib="${inherited_memory_mib}"
+    PROFILE_CLUSTER_SIZING_RANK="${inherited_rank}"
+    PROFILE_CLUSTER_SIZING_MEMORY_MIB="${inherited_memory_mib}"
   fi
 
   PROFILE_RANK="${profile_rank}"
@@ -8815,8 +8974,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=24
       PROFILE_SITE_WORKER_CONCURRENCY=16
       PROFILE_POSTGRES_MAX_CONNECTIONS=180
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 12288 24576)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 32768 65536)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 12288 24576)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 32768 65536)"
       PROFILE_POSTGRES_WORK_MEM="16MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="1GB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=16
@@ -8834,8 +8993,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=20
       PROFILE_SITE_WORKER_CONCURRENCY=12
       PROFILE_POSTGRES_MAX_CONNECTIONS=150
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 8192 16384)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 20480 32768)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 8192 16384)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 20480 32768)"
       PROFILE_POSTGRES_WORK_MEM="8MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=12
@@ -8853,8 +9012,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=16
       PROFILE_SITE_WORKER_CONCURRENCY=8
       PROFILE_POSTGRES_MAX_CONNECTIONS=120
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 4096 8192)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 8192 16384)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 4096 8192)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 8192 16384)"
       PROFILE_POSTGRES_WORK_MEM="8MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="512MB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
@@ -8872,8 +9031,8 @@ load_profile_tuning() {
       PROFILE_DB_MAX_OVERFLOW=10
       PROFILE_SITE_WORKER_CONCURRENCY=5
       PROFILE_POSTGRES_MAX_CONNECTIONS=80
-      shared_mib="$(clamp_mib "$((mem_mib * 25 / 100))" 1024 4096)"
-      cache_mib="$(clamp_mib "$((mem_mib * 625 / 1000))" 4096 12288)"
+      shared_mib="$(clamp_mib "$((tuning_memory_mib * 25 / 100))" 1024 4096)"
+      cache_mib="$(clamp_mib "$((tuning_memory_mib * 625 / 1000))" 4096 12288)"
       PROFILE_POSTGRES_WORK_MEM="4MB"
       PROFILE_POSTGRES_MAINTENANCE_WORK_MEM="256MB"
       PROFILE_POSTGRES_MAX_WORKER_PROCESSES=8
@@ -9004,6 +9163,10 @@ load_profile_tuning() {
       ;;
   esac
 
+  if [[ -n "${inherited_rank}" ]] && (( shared_mib + postgres_extra_mib > mem_mib )); then
+    die "Joining host cannot fit the inherited PostgreSQL memory cap."
+  fi
+
   PROFILE_POSTGRES_DB_MEMORY_LIMIT="$(format_docker_memory_mib "$((shared_mib + postgres_extra_mib))")"
   PROFILE_POSTGRES_SHARED_BUFFERS="$(format_pg_memory_mib "${shared_mib}")"
   PROFILE_POSTGRES_EFFECTIVE_CACHE_SIZE="$(format_pg_memory_mib "${cache_mib}")"
@@ -9013,6 +9176,61 @@ load_profile_tuning() {
   PROFILE_POSTGRES_CHECKPOINT_TIMEOUT="15min"
   PROFILE_POSTGRES_CHECKPOINT_COMPLETION_TARGET="0.9"
   PROFILE_POSTGRES_RANDOM_PAGE_COST="1.1"
+}
+
+# Use a retained contract after hydration/redeploy. Legacy clustered sources
+# establish the same contract from their existing profile fields once; fresh
+# standalone deployment retains automatic sizing. Do not read ambient override
+# variables for this authority-bound configuration.
+load_deployment_profile_tuning() {
+  local inherited_rank inherited_memory_mib
+  inherited_rank="$(read_env_value BOREALIS_CLUSTER_SIZING_RANK)"
+  inherited_memory_mib="$(read_env_value BOREALIS_CLUSTER_SIZING_MEMORY_MIB)"
+  if [[ -z "${inherited_rank}" && -z "${inherited_memory_mib}" ]] && cluster_mode_enabled; then
+    inherited_rank="$(read_env_value BOREALIS_DEPLOYMENT_PROFILE_RANK)"
+    inherited_memory_mib="$(read_env_value BOREALIS_DEPLOYMENT_HOST_MEMORY_MIB)"
+    [[ -n "${inherited_rank}" && -n "${inherited_memory_mib}" ]] \
+      || die "Cluster preparation requires the source sizing configuration."
+  fi
+  load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)" "${inherited_rank}" "${inherited_memory_mib}"
+}
+
+# The local installer keeps automatic selection until conversion. Workloads and
+# the original controller publish the effective source sizing for joining hosts.
+write_profile_environments() {
+  cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
+  printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\n' \
+    "${PROFILE_CLUSTER_SIZING_RANK}" "${PROFILE_CLUSTER_SIZING_MEMORY_MIB}" >> "${COMPOSE_ENV}"
+  printf 'BOREALIS_CLUSTER_SIZING_RANK=%s\nBOREALIS_CLUSTER_SIZING_MEMORY_MIB=%s\n' \
+    "${PROFILE_CLUSTER_SIZING_RANK:-${PROFILE_RANK}}" \
+    "${PROFILE_CLUSTER_SIZING_MEMORY_MIB:-${PROFILE_HOST_MEMORY_MIB}}" >> "${RUNTIME_ENV}"
+}
+
+ensure_profile_infrastructure_resources() {
+  # The original Engine owns these conversion inputs. Joined nodes consume the
+  # resulting shared workloads and admission policy, including explicit overrides.
+  if [[ ( "${PROFILE_RANK}" == "1" || "${PROFILE_RANK}" == "2" ) && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]]; then
+    python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" seed-infrastructure "${DEPLOY_DIR}"
+  fi
+}
+
+ensure_profile_csi_resources() {
+  [[ ( "${PROFILE_RANK}" == "1" || "${PROFILE_RANK}" == "2" ) && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]] || return 0
+  k3s_longhorn_enabled || return 0
+  local setting="settings.longhorn.io/system-managed-csi-components-resource-limits"
+  local patch attempt
+  for attempt in 1 2 3; do
+    patch="$(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get "${setting}" -o json \
+      | python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" infrastructure-csi-patch)" \
+      || die "Cannot read profile Longhorn CSI resource settings."
+    [[ -n "${patch}" ]] || return 0
+    if k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" patch "${setting}" --type=json -p "${patch}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "Applied missing profile CSI defaults" "${C_GREEN}"
+      return 0
+    fi
+    printf 'Longhorn CSI setting patch attempt %s failed.\n' "${attempt}" >> "${BUILD_LOG}"
+  done
+  die "Cannot update profile Longhorn CSI resource settings. See ${BUILD_LOG}."
 }
 
 write_compose_env() {
@@ -9105,7 +9323,8 @@ write_compose_env() {
   postgres_runtime_gid="$(resolve_postgres_runtime_gid)"
   validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_UID" "${postgres_runtime_uid}"
   validate_numeric_id "BOREALIS_POSTGRES_RUNTIME_GID" "${postgres_runtime_gid}"
-  load_profile_tuning "$(detect_host_vcpu)" "$(detect_host_memory_mib)"
+  load_deployment_profile_tuning
+  ensure_profile_infrastructure_resources
   webui_memory_limit="${PROFILE_WEBUI_FRONTEND_MEMORY_LIMIT}"
   webui_cpu_limit="${PROFILE_WEBUI_FRONTEND_CPU_LIMIT}"
   if [[ "${mode}" == "dev" ]]; then
@@ -9316,7 +9535,7 @@ EOF
 
   write_webui_mode_env_file "${WEBUI_ENV}" "${mode}"
 
-  cp "${RUNTIME_ENV}" "${COMPOSE_ENV}"
+  write_profile_environments
   cat >> "${COMPOSE_ENV}" <<EOF
 BOREALIS_OPERATOR_IMAGE=${IMAGE_TAGS[borealis-operator]:-borealis-engine/borealis-operator:local}
 BOREALIS_API_BACKEND_IMAGE=${IMAGE_TAGS[api-backend]:-borealis-engine/api-backend:local}
@@ -10165,6 +10384,7 @@ deploy_engine() {
   local previous_internal_api_base_url=""
   previous_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   prepare_runtime "${mode}"
+  ensure_profile_csi_resources
   ensure_engine_agent_install_cache
   build_images "${mode}"
   ensure_borealis_node_manager
@@ -11355,6 +11575,30 @@ schedule_borealis_node_manager_refresh() {
   local main_pid=""
   current_revision="$(run_privileged cat "${BOREALIS_NODE_MANAGER_REVISION_FILE}" 2>/dev/null || true)"
   main_pid="$(run_privileged systemctl show --property=MainPID --value "${BOREALIS_NODE_MANAGER_SERVICE}" 2>/dev/null || true)"
+  local unit_name="borealis-node-manager-refresh-${revision:0:12}-$$"
+  if [[ -n "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+    local expected="${BOREALIS_CLUSTER_SNAPSHOT_MANAGER_SHA256:-}"
+    [[ "${expected}" =~ ^[0-9a-f]{64}$ ]] || die "Development refresh requires the packaged helper digest."
+    local installed_digest
+    installed_digest="$(run_privileged sha256sum -- "${BOREALIS_NODE_MANAGER_BINARY}")" || die "Cannot inspect installed node-manager."
+    if [[ "${installed_digest%% *}" == "${expected}" && "${main_pid}" =~ ^[1-9][0-9]*$ ]] \
+      && run_privileged test "/proc/${main_pid}/exe" -ef "${BOREALIS_NODE_MANAGER_BINARY}" \
+      && git -c "safe.directory=${SCRIPT_DIR}" -C "${SCRIPT_DIR}" diff --quiet "${revision}" -- Data/Engine/K3s/cluster/node-manager.service \
+      && run_privileged cmp -s "${K3S_CLUSTER_ASSET_DIR}/node-manager.service" "/etc/systemd/system/${BOREALIS_NODE_MANAGER_SERVICE}" \
+      && [[ "$(run_privileged systemctl show --property=NeedDaemonReload --value "${BOREALIS_NODE_MANAGER_SERVICE}")" == no ]] \
+      && run_privileged systemctl is-active --quiet "${BOREALIS_NODE_MANAGER_SERVICE}" \
+      && run_privileged test -S /run/borealis/node-manager.sock; then
+      if [[ "${current_revision}" != "${revision}" ]]; then
+        record_borealis_node_manager_revision "${revision}"
+      fi
+      return 0
+    fi
+    run_privileged systemd-run --unit "${unit_name}" --on-active=5s --property=Type=oneshot \
+      --property=EnvironmentFile=/etc/borealis/development-catalog.env --collect \
+      "${BOREALIS_NODE_MANAGER_BINARY}" activate-update --target-sha "${revision}" \
+      --source-root "${SCRIPT_DIR}" --development-candidate "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}"
+    return
+  fi
   if [[ "${current_revision}" == "${revision}" && "${main_pid}" =~ ^[1-9][0-9]*$ ]] \
     && run_privileged test "/proc/${main_pid}/exe" -ef "${BOREALIS_NODE_MANAGER_BINARY}"; then
     return 0
@@ -11363,7 +11607,6 @@ schedule_borealis_node_manager_refresh() {
   local service_source="${K3S_CLUSTER_ASSET_DIR}/node-manager.service"
   [[ -x "${staged_binary}" ]] || die "Node-manager refresh binary unavailable: ${staged_binary}"
   [[ -f "${service_source}" ]] || die "Node-manager refresh service unit unavailable: ${service_source}"
-  local unit_name="borealis-node-manager-refresh-${revision:0:12}-$$"
   run_privileged systemd-run \
     --unit "${unit_name}" \
     --on-active=5s \
@@ -11768,6 +12011,53 @@ for key,value in sorted((payload.get("data") or {}).items()):
   restore_previous=0
 )
 
+# K3s imports the verified archives from its normal watched directory.
+# Resolve all roles in one observation and retain the ordinary Spegel check.
+wait_for_snapshot_images() {
+  local expected=""
+  expected="$(python3 - "${IMAGE_MANIFEST}" "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE}" "${CLUSTER_TARGET_REVISION}" <<'PYMANIFEST'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    manifest = json.load(stream)
+if (manifest["channel"], manifest["release"], manifest["source_sha"]) != ("development", *sys.argv[2:]):
+    raise SystemExit("Selected development image generation changed")
+if len(manifest["services"]) != 9:
+    raise SystemExit("Incomplete application image generation")
+for item in manifest["services"].values():
+    print(item["archive_reference"], item["image"], item["manifest_digest"])
+PYMANIFEST
+)" || die "Invalid staged development image manifest."
+  local listing="" content="" source="" target="" digest="" seen="" present="" repository=""
+  local attempt=0 ready=0
+  for ((attempt=0; attempt<60; attempt++)); do
+    listing="$(k3s_ctr images ls)" || return 1
+    content="$(k3s_ctr content ls)" || return 1
+    ready=1
+    while read -r source target digest; do
+      present="$(awk -v image="${target}" '$1==image {print $3}' <<< "${listing}")"
+      if [[ -n "${present}" && "${present}" != "${digest}" ]]; then
+        die "Development image import conflicts with an existing digest reference."
+      fi
+      if [[ -z "${present}" ]]; then
+        seen="$(awk -v image="${source}" '$1==image {print $3}' <<< "${listing}")"
+        if [[ "${seen}" == "${digest}" ]]; then
+          k3s_ctr images tag "${source}" "${target}" >/dev/null || return 1
+        fi
+        ready=0
+      fi
+      repository="${target#*/}"
+      repository="${repository%@*}"
+      if ! awk -v digest="${digest}" -v label="containerd.io/distribution.source.${target%%/*}=${repository}" \
+          '$1==digest && index($0,label) {found=1} END {exit !found}' <<< "${content}"; then
+        ready=0
+      fi
+    done <<< "${expected}"
+    (( ready == 0 )) || return 0
+    sleep 2
+  done
+  die "Development image digests did not become available for local distribution."
+}
+
 stage_cluster_node_revision_images() {
   prepare_cluster_node_runtime
   K3S_PEER_CIDRS="$(read_env_value BOREALIS_K3S_PEER_CIDRS "${RUNTIME_ENV}")"
@@ -11776,15 +12066,21 @@ stage_cluster_node_revision_images() {
   export BOREALIS_ENGINE_NETWORK_MODE="${ENGINE_NETWORK_MODE}"
   export BOREALIS_ENGINE_DEPLOYMENT_PROFILE="${ENGINE_DEPLOYMENT_PROFILE}"
   load_existing_image_tags
-  build_images prod
-  export_image_manifest_env
-  write_image_manifest prod
+  if [[ -n "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+    wait_for_snapshot_images
+  else
+    build_images prod
+    export_image_manifest_env
+    write_image_manifest prod
+  fi
   local service=""
-  for service in "${BUILD_ROLES[@]}"; do
-    [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
-    import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
-  done
-  prune_stale_k3s_borealis_image_archives
+  if [[ -z "${BOREALIS_CLUSTER_SNAPSHOT_CANDIDATE:-}" ]]; then
+    for service in "${BUILD_ROLES[@]}"; do
+      [[ -n "${IMAGE_TAGS[${service}]:-}" ]] || continue
+      import_k3s_local_image_into_k3s "${service}" "${IMAGE_TAGS[${service}]}" "cluster-node-redeploy"
+    done
+    prune_stale_k3s_borealis_image_archives
+  fi
   local marker_temp=""
   marker_temp="$(mktemp "${DEPLOY_DIR}/cluster-staged-revision.XXXXXX")"
   printf '%s\n' "${CLUSTER_TARGET_REVISION}" > "${marker_temp}"

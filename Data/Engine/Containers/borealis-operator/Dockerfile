@@ -13,7 +13,7 @@ WORKDIR /opt/Borealis
 
 COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis-api-backend-go
 
-RUN chmod +x /usr/local/bin/borealis-api-backend-go
+RUN chmod 0755 /usr/local/bin/borealis-api-backend-go
 
 USER borealis-engine:borealis-engine
 

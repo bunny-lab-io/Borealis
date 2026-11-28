@@ -149,16 +149,40 @@ func newAuthService(cfg gatewayConfig) (*authService, func(), error) {
 }
 
 func openOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
+	return openPostgresOperatorStore(cfg, false)
+}
+
+func openControlOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
+	return openPostgresOperatorStore(cfg, true)
+}
+
+func openPostgresPool(cfg gatewayConfig, control bool) (*sql.DB, error) {
 	if strings.TrimSpace(cfg.DatabaseURL) == "" {
-		return nil, func() {}, fmt.Errorf("BOREALIS_DATABASE_URL is required")
+		return nil, fmt.Errorf("BOREALIS_DATABASE_URL is required")
 	}
-	db, err := sql.Open("postgres", normalizePostgresDriverURL(cfg))
-	if err != nil {
-		return nil, func() {}, err
+	var db *sql.DB
+	if control {
+		db = sql.OpenDB(&postgresControlConnector{dsn: normalizePostgresDriverURL(cfg)})
+	} else {
+		var err error
+		db, err = sql.Open("postgres", normalizePostgresDriverURL(cfg))
+		if err != nil {
+			return nil, err
+		}
 	}
 	db.SetMaxOpenConns(cfg.DBMaxOpenConns)
 	db.SetMaxIdleConns(cfg.DBMaxIdleConns)
 	db.SetConnMaxIdleTime(5 * time.Minute)
+	return db, nil
+}
+
+func openPostgresOperatorStore(cfg gatewayConfig, control bool) (operatorStore, func(), error) {
+	// Bootstrap DDL can wait longer than an ownership transaction. Finish it
+	// through the ordinary pool before exposing a bounded controller store.
+	db, err := openPostgresPool(cfg, false)
+	if err != nil {
+		return nil, func() {}, err
+	}
 	store := &postgresOperatorStore{db: db}
 	bootstrapTimeout := cfg.DBConnectTimeout + 15*time.Second
 	if bootstrapTimeout < 15*time.Second {
@@ -177,6 +201,16 @@ func openOperatorStore(cfg gatewayConfig) (operatorStore, func(), error) {
 	if err := store.ensureClusterSchema(ctx); err != nil {
 		_ = db.Close()
 		return nil, func() {}, fmt.Errorf("failed to ensure cluster control tables: %w", err)
+	}
+	if control {
+		bounded, err := openPostgresPool(cfg, true)
+		if err != nil {
+			_ = db.Close()
+			return nil, func() {}, err
+		}
+		_ = db.Close()
+		db = bounded
+		store.db = bounded
 	}
 	return store, func() { _ = db.Close() }, nil
 }

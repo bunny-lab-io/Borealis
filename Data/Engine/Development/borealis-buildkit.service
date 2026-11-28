@@ -1,0 +1,32 @@
+[Unit]
+Description=Borealis isolated development image builder
+ConditionFileIsExecutable=/var/lib/borealis-build-tools/v0.35.1/buildkitd
+ConditionPathExists=/etc/borealis-buildkit/buildkitd.toml
+ConditionPathExists=/etc/systemd/system/borealis-buildkit.service.d/resources.conf
+ConditionPathIsMountPoint=/var/lib/borealis-build/state
+
+[Service]
+Type=simple
+User=borealis-build
+Group=borealis-build
+UMask=0077
+RuntimeDirectory=borealis-buildkit
+RuntimeDirectoryMode=0700
+Environment=HOME=/var/lib/borealis-build
+Environment=XDG_RUNTIME_DIR=/run/borealis-buildkit
+ExecStart=/usr/bin/rootlesskit --net=none --state-dir=/run/borealis-buildkit/ns /var/lib/borealis-build-tools/v0.35.1/buildkitd --rootless --config=/etc/borealis-buildkit/buildkitd.toml --root=/var/lib/borealis-build/state --addr=unix:///run/borealis-buildkit/buildkitd.sock
+PrivateNetwork=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=yes
+ReadWritePaths=/var/lib/borealis-build/state
+InaccessiblePaths=-/opt/Borealis -/run/docker.sock -/run/docker -/run/containerd -/run/k3s -/run/borealis -/run/borealis-node-manager -/run/secrets -/var/lib/docker -/var/lib/containerd -/var/lib/rancher -/var/lib/kubelet -/var/lib/longhorn -/etc/borealis -/etc/kubernetes -/etc/rancher -/etc/wireguard -/etc/ssh
+# Ubuntu uidmap validates the account-owned ranges when RootlessKit starts.
+AmbientCapabilities=
+Nice=10
+IOWeight=10
+CPUAccounting=yes
+MemoryAccounting=yes
+TasksAccounting=yes
+IOAccounting=yes
+Restart=no

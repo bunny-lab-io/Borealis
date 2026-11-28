@@ -6,13 +6,90 @@ Borealis maintainers use this runbook to publish qualification builds for cluste
 | Channel | Tag format | GitHub status | Intended use | Engine installer assets |
 | --- | --- | --- | --- | --- |
 | Stable | `YYYY.MM.REVISION` or `YYYY.MM.REVISION.HOTFIX` | Normal release | Supported standalone installs and cluster updates | Required |
-| Qualification | `YYYY.MM.REVISION-rc.N` or `YYYY.MM.REVISION.HOTFIX-rc.N` | Pre-release | Unsupported cluster testing before stable publication | Not required |
-| Development | `dev-<first-12-commit-characters>` | Not a GitHub release | Initial cluster baseline and HMR restoration | Not applicable |
+| Qualification | `YYYY.MM.REVISION-rc.N` or `YYYY.MM.REVISION.HOTFIX-rc.N` | Pre-release | Unsupported cluster testing before stable publication | No standalone installer; node bootstrap and production images required for SSH onboarding |
+| Local development snapshot | `dev-<64-character SHA-256>` | Engine-local | Explicitly selected, unsupported development candidate | Digest-bound local inventories and archives |
+| Legacy development baseline | `dev-<first-12-commit-characters>` | Not a GitHub release | Initial cluster baseline and HMR restoration | Not applicable |
 
 `REVISION` counts normal releases published during calendar month. `HOTFIX` counts focused corrections based on one normal release. `N` starts at `1` and increases for each qualification candidate built for same intended stable version. These values express publication order, not semantic major, minor, or patch scope. See [Security Policy](https://github.com/bunny-lab-io/Borealis/blob/main/SECURITY.md).
 
-!!! tip "Normal development path"
+!!! tip "Qualification and stable publication"
     Merge reviewed changes to `main`, publish `-rc.1` from resulting commit, and test it through Cluster Management. Fix failures through another reviewed commit and publish `-rc.2`. When candidate passes, create stable tag from same tested commit.
+
+## Reuse pinned packaging inputs
+
+An isolated Linux build worker can retain verified K3s downloads, external OCI blobs and frozen Ubuntu packages between builds. Give the build account its own private directory on a provisioned filesystem. Set the following environment variables before running the ordinary node packagers.
+
+| Variable | Value |
+|---|---|
+| `BOREALIS_BUILD_ARTIFACT_CACHE` | Absolute path to the build account’s mode-0700 object directory |
+| `BOREALIS_BUILD_CACHE_MAX_BYTES` / `BOREALIS_BUILD_CACHE_MAX_OBJECTS` | Cache byte and object budgets for this worker |
+| `BOREALIS_BUILD_CACHE_RESERVE_BYTES` / `BOREALIS_BUILD_CACHE_RESERVE_INODES` | Capacity that must remain available for staged output, other workloads and recovery |
+| `BOREALIS_BUILD_INPUTS_OFFLINE=1` | Require these inputs to be present before packaging |
+
+Derive the budgets from available capacity after accounting for the running Engine, retained releases, build workspace and expanded outputs. The packagers verify each input against the checked-out pin and still run their native archive checks. A missing offline input or damaged object stops packaging. Build outputs are independent files. Existing release publication and deployment checks apply.
+
+## Package a local development revision
+
+In an isolated Linux build worker, give the development packager a local Git repository and revision. A local commit is sufficient. The worker freezes that commit before opening any build inputs. Uncommitted or untracked files stay outside the snapshot. Keep operational credentials, the operational database and privileged cluster sockets outside the worker. For a changed application image, mount a dedicated, resource-limited BuildKit worker socket at `/run/borealis-buildkit/buildkitd.sock` inside the build worker and make `buildctl` available. Keep the daemon and its persistent layer cache separate from the operational Engine runtime.
+
+```bash
+mkdir -p "$BUILD_OUTPUT"
+python3 Tests/tools/build_engine_development.py build \
+  --source "$SOURCE_REPO" --revision "$LOCAL_COMMIT" --output "$BUILD_OUTPUT"
+```
+
+To reuse a retained immutable release, add `--reuse-release "$RETAINED_RELEASE"`. Unchanged roles retain their original image reference and digest. The packager compares their tracked build inputs and file modes before reuse.
+
+For an offline WebUI rebuild, mount the verified Linux AMD64 Node OCI layout and the npm download cache read-only under `/build-inputs/webui`. Name the layout directory for the pinned Node manifest SHA-256 and the cache directory for the frozen frontend `package-lock.json` SHA-256. Seed the latter using the locked public packages on the same platform with lifecycle scripts disabled. The build worker runs the normal dependency installation and production compilation offline. A missing or damaged required package stops the build.
+
+The command prints the published local directory. Use `verify DIRECTORY` with the same tool to check its source binding and content identity. A complete five-family package has a `dev-` identity derived from its manifest. Select `--family host_package` to exercise only frozen Ubuntu packaging. A partial build has a `components-` identity. Neither form publishes a GitHub tag. The native `borealis-node-manager development-candidate-proof` command verifies the complete local catalog and all artifact digests. This read-only check leaves installation, operation authority and cluster health untested. Current RC29 Engines still require an immutable GitHub release for rolling deployment and onboarding.
+
+### Deploy a retained development snapshot
+
+A coordinator running the development-aware API, controller and native helper can select a local snapshot under **Cluster Management**. For an existing member, build with `--base-sha "$SERVING_COMMIT"` as well as the target revision. This packages the fast-forward Git history and binds deployment compatibility to the snapshot. A joining-only package omits this history and cannot be selected for an existing member.
+
+For a fresh source installation, build one complete candidate with a distinct descendant revision and the exact installation commit as its base. Both commits must contain readers for every inventory in the candidate. Verify the candidate with the matched native helper before installation. Configure the catalog opt-in before the first deployment. During Enable Cluster the Engine verifies a compatible immutable release ancestor through GitHub and records its version for the first managed update. The verified update still requires the usual consent, outage acknowledgement and health gates.
+
+On a lab Engine explicitly enabled for development, the administrator creates `/var/lib/borealis-artifacts/candidates` with owner root, group 64646 and mode 0750. Use the private, budgeted artifact store on the same filesystem. Import the chosen output with the installed trusted packager and native verifier. Run the import outside the build account.
+
+```bash
+python3 Tests/tools/retain_engine_development.py --runtime-catalog \
+  --source "$BUILD_OUTPUT" --references /var/lib/borealis-artifacts/candidates \
+  --candidate "$CANDIDATE" --source-sha "$LOCAL_COMMIT" \
+  --verifier /usr/local/sbin/borealis-node-manager
+```
+
+When enabling local snapshots on an existing cluster, verify that its installed Borealis resource definitions support the full 68-character development identity. Older installations can display a snapshot and then stop at preflight with a Kubernetes 422 on `spec.targetRelease`. From the approved, snapshot-aware source on the coordinating Engine, preview and apply the managed definitions before the first local deployment. Stop for review if the API reports a field ownership conflict.
+
+```bash
+sudo k3s kubectl apply --server-side --dry-run=server --field-manager=borealis-engine -f Data/Engine/K3s/cluster/crds.yaml
+sudo k3s kubectl apply --server-side --field-manager=borealis-engine -f Data/Engine/K3s/cluster/crds.yaml
+```
+
+During a development member update, Borealis checks the running node-manager against the helper packaged with the selected snapshot. An unchanged running helper and matching service unit can retain their socket across the update. A changed helper uses the verified bootstrap bundle. Development promotion checks the running executable and revision before directing workloads to the candidate. A member running an older helper may need the controlled lab activation procedure when first adopting this behavior.
+
+To opt in, install a root-owned `/etc/borealis/development-catalog.env` containing the following single line followed by a newline. Apply through the normal managed helper activation and node workload rollout. The API and controller receive read-only access to the verified generations. The build worker keeps its own separate directories.
+
+```text
+BOREALIS_ENGINE_DEVELOPMENT_CANDIDATES=/var/lib/borealis-artifacts/candidates
+```
+
+Select the exact snapshot, review its source commit and type `DEPLOY DEVELOPMENT`. A one-member cluster requires an explicit outage acknowledgement. Rolling deployment retains the previous runtime image manifest and advances the serving manifest after workload promotion. The WebUI identifies a serving development snapshot as unsupported, with full release validation pending.
+
+To leave development, select a supported whole-cluster forward update whose published source includes the serving commit and meets the rolling, database and health gates. After successful promotion and completion of any distribution or recovery obligations, the administrator can remove the opt-in configuration on the next managed rollout. Live qualification of this path on the RC29 lab is outstanding.
+
+### Provision the isolated image worker
+
+Enable this worker only on an explicitly authorized development Engine. The coordinating Engine can keep its existing cluster and HMR settings while the worker builds inert artifacts.
+
+1. Review the Ubuntu package transaction with `apt-get -s --no-upgrade --no-install-recommends install uidmap`. Install the signed package and its required dependencies. The Engine01 lab added `uidmap` and `libsubid4` only.
+2. Create a locked, dedicated account with `useradd --system --add-subids-for-system --create-home --user-group --home-dir /var/lib/borealis-build --shell /usr/sbin/nologin borealis-build`. Protect the home with mode `0700`. Verify one non-overlapping range of at least 65,536 entries in each of `/etc/subuid` and `/etc/subgid`. Use the ranges allocated on this Engine. Check `id borealis-build` and `sudo -l -U borealis-build`; the account belongs only to its private group and has no sudo rules.
+3. Verify the distribution's existing RootlessKit AppArmor profile is loaded. Install the pinned upstream Linux AMD64 `buildctl` and `buildkitd` executables under the root-owned directory `/var/lib/borealis-build-tools/v0.35.1/`. Verify the compressed archive SHA-256 `b248c2b91698aafef11818fe8b681dc5e341581f7d5676709ff45ca1f29b0408` before extracting either executable.
+4. Mount a bounded private filesystem at `/var/lib/borealis-build/state`, owned by the build account. Size it against current free bytes, inodes, expected layers and operational reserves. The lab used a newly created private 4 GiB ext4 backing file mounted with `nodev,nosuid`. After a reboot, remount the same retained filesystem before starting the worker. The service checks for this mount and stays stopped when it is absent.
+5. Install the supplied `borealis-buildkit.service` under `/etc/systemd/system/`. Create its root-owned `resources.conf` drop-in and `/etc/borealis-buildkit/buildkitd.toml` using measured host headroom. Select the native OCI snapshotter, set `max-parallelism`, enable cache GC below the filesystem limit and disable the containerd worker. The lab allowed two CPUs, 2 GiB RAM, zero swap and 256 tasks. The worker has a private network with no external route. Stage verified build inputs before an offline build.
+6. Run `systemctl daemon-reload` and start only `borealis-buildkit.service`. As the build user, run `buildctl --addr unix:///run/borealis-buildkit/buildkitd.sock debug workers`. Verify non-root execution using a real build and check that the Engine workloads and database remain healthy. Mount only this dedicated socket in an authorized packager with its own resource limits. Keep the operational sockets, database configuration and shared identity outside both workers.
+
+Stop the dedicated service to suspend development building. Its persistent cache and the deployment's independently retained recovery generation survive stopping the worker. This setup alone creates no cluster operation and changes no serving image.
 
 ## Understand Immutability
 
@@ -65,31 +142,104 @@ Qualify the exact K3s baseline declared by that source commit. Fresh installs cu
 
 ## Publish Qualification Candidate
 
-Qualification release exercises same immutable Git source consumed by cluster rolling update. It remains unsupported and never becomes stable by changing GitHub pre-release checkbox.
+Qualification release exercises same immutable Git source consumed by cluster rolling update. Keep it marked **Pre-release**, never **Latest**. It remains unsupported and never becomes stable by changing GitHub pre-release checkbox. Save a draft, attach and verify every required asset, then publish.
+
+Record the current stable **Latest** release before creating the draft. If none exists, record the authenticated endpoint's 404 response; authentication or network failures do not prove absence.
 
 ```sh
 REPOSITORY="bunny-lab-io/Borealis"
 RELEASE="YYYY.MM.REVISION-rc.1"
 SOURCE_SHA="$(git rev-parse HEAD)"
 
+# Retain this result for the post-publication comparison.
+gh api "repos/${REPOSITORY}/releases/latest" --jq '{id,tag_name}'
+
 git tag -a "${RELEASE}" "${SOURCE_SHA}" -m "Borealis ${RELEASE}"
 git push origin "refs/tags/${RELEASE}"
 
 # Draft first. Draft remains unpublished while metadata is inspected.
 gh release create "${RELEASE}" --repo "${REPOSITORY}" \
-  --verify-tag --draft --prerelease \
+  --verify-tag --draft --prerelease --latest=false \
   --title "${RELEASE}" --generate-notes
 gh release view "${RELEASE}" --repo "${REPOSITORY}" \
   --json tagName,isDraft,isPrerelease,targetCommitish,url
 
-# Publication locks tag. Do this only after draft review.
-gh release edit "${RELEASE}" --repo "${REPOSITORY}" \
-  --draft=false --prerelease
-gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
-  --jq '{tag_name,draft,prerelease,immutable}'
+# Package source, helper and production images before publication.
+gh workflow run publish-engine-release-assets.yml \
+  --repo "${REPOSITORY}" --ref "${RELEASE}" -f "release=${RELEASE}"
+gh run list --repo "${REPOSITORY}" \
+  --workflow publish-engine-release-assets.yml \
+  --event workflow_dispatch --branch "${RELEASE}" --limit 5
 ```
 
-Expected final values are exact tag, `draft: false`, `prerelease: true`, and `immutable: true`. Cluster Management then lists candidate only when it is same or newer than pinned baseline, descends from pinned commit, and passes release-manifest compatibility checks.
+When a previous immutable release contains the same frozen Ubuntu package set, pass `-f "host_package_seed=$PREVIOUS_RELEASE"` at dispatch. The runner checks the published archive digest and every package against the target lock before expensive image builds. A mismatch stops packaging. For an existing draft whose tagged workflow predates this option, dispatch the reviewed workflow from the approved integration ref and keep `-f "release=$RELEASE"` pointed at the original tag. The producer checks out the target tag for every release artifact.
+
+For unchanged external image pins, use `-f "external_image_seed=$PREVIOUS_RELEASE"` to reuse published OCI archives. The runner compiles the verifier from the target tag, verifies each archive against its published GitHub digest and the target's image pins, and generates the new inventory from those proofs. Missing archives or a changed pin stop packaging before application images are built.
+
+Before publication, wait for packaging to pass. Inspect bootstrap archive/manifest, `borealis-node-images-linux-amd64.json`, all nine `borealis-node-image-<service>-linux-amd64.oci.tar` assets, the four K3s assets, all23 external OCI archives with `borealis-node-external-images-linux-amd64.json`, and both Ubuntu package inventories and archives, named `borealis-node-host-packages-ubuntu-<suite>-linux-amd64` for `noble` and `resolute` with `.tar` and `.json` suffixes. Verify GitHub asset digests and matching release/source identities. Packaging requires Docker Buildx and builds production images once in an isolated builder. K3s binary and bundled images use the release's pinned baseline. These assets are intended for delivery by the existing Engine; operators do not download or execute them on joining hosts. Packaging alone does not qualify SSH enrollment.
+
+??? note "GitHub UI draft when workflow dispatch or tag creation is unavailable"
+    In GitHub's **New release** page, enter the approved qualification tag and title. Under **Target > Recent Commits**, select the approved commit and verify its full SHA. Choose **Pre-release**, then **Save draft**. Never choose **Latest** or leave a moving branch as the draft target.
+
+    Saving a UI draft with a new tag does not create the Git tag. GitHub creates it at publication, but the packaging workflow checks out an existing tag. Do not publish an empty immutable release to unblock that checkout. If separate authenticated tag creation and workflow dispatch are unavailable, run the same five packagers below and upload their outputs to the draft through the authenticated GitHub UI.
+
+    Use a separate packaging checkout on an authorized Linux AMD64 build host. Requirements match the workflow: Git, Python 3.12, Go 1.25.12, Docker with Buildx, `zstd`, and access to the pinned dependency sources. The image packager creates and removes its own builder; existing deployed or imported images are not release assets. Keep output and temporary files outside the source checkout and provide space for the builds and all archives.
+
+    ```sh
+    set -eu
+    REPOSITORY="bunny-lab-io/Borealis"
+    RELEASE="YYYY.MM.REVISION-rc.1"
+    SOURCE_SHA="<approved full 40-character commit SHA>"
+    SOURCE_CHECKOUT="/path/to/clean/pinned/checkout"
+    GO_BIN="/path/to/go1.25.12/bin/go"
+    test "$(git -C "$SOURCE_CHECKOUT" rev-parse HEAD)" = "$SOURCE_SHA"
+    test -z "$(git -C "$SOURCE_CHECKOUT" status --porcelain)"
+
+    PACKAGING_ROOT="$(mktemp -d)"
+    PACKAGING_SOURCE="$PACKAGING_ROOT/source"
+    git clone --no-local --no-tags --depth=1 --no-checkout \
+      "$SOURCE_CHECKOUT" "$PACKAGING_SOURCE"
+    git -C "$PACKAGING_SOURCE" checkout --detach "$SOURCE_SHA"
+    # Local tag only: no push or release publication occurs here.
+    git -C "$PACKAGING_SOURCE" tag "$RELEASE" "$SOURCE_SHA"
+    test "$(git -C "$PACKAGING_SOURCE" rev-parse "refs/tags/$RELEASE^{commit}")" = "$SOURCE_SHA"
+
+    python3.12 -m venv "$PACKAGING_ROOT/venv"
+    PYTHON="$PACKAGING_ROOT/venv/bin/python"
+    "$PYTHON" -m pip install --disable-pip-version-check \
+      -r "$PACKAGING_SOURCE/Tests/requirements-policy.txt"
+    for family in bootstrap image k3s external; do
+      "$PYTHON" "$PACKAGING_SOURCE/Tests/tools/build_node_${family}_assets.py" \
+        --source "$PACKAGING_SOURCE" --release "$RELEASE" \
+        --source-sha "$SOURCE_SHA" --repository "$REPOSITORY" \
+        --go-bin "$GO_BIN" --output-dir "$PACKAGING_ROOT/assets/$family"
+    done
+    "$PYTHON" "$PACKAGING_SOURCE/Tests/tools/build_node_host_package_assets.py" \
+      --source "$PACKAGING_SOURCE" --release "$RELEASE" \
+      --source-sha "$SOURCE_SHA" --repository "$REPOSITORY" \
+      --output-dir "$PACKAGING_ROOT/assets/host-packages"
+    ```
+
+    Every packager must exit successfully. Current qualification output is 42 files: bootstrap archive/manifest, nine application archives/inventory, four K3s assets, 23 external archives/inventory, and host-package tar/inventory. The tools verify the local tag and exact source, then build isolated snapshots; they need no remote tag or published release. Output directories cannot replace an earlier packaging run. Keep command logs and manifests with the release handoff.
+
+    Transfer the unchanged output files to the authenticated browser host if needed and compare the filename/size set. Edit the saved draft, attach all 42 files with their original names, wait for every upload to finish, and save the draft again. Require GitHub's uploaded sizes and SHA256 digests to match the retained canonical producer proofs, and inspect the manifests' repository, release, full source SHA and platform. Rehash transferred files when evidence is missing or conflicts; existing matching producer and uploaded hashes need no redundant full local rehash. Recheck the exact draft target and **Pre-release** status before publication. Keep **Latest** disabled. Local packaging and asset upload do not themselves publish or qualify the release.
+
+Publish only after draft metadata, complete packaging and uploaded assets pass inspection:
+
+```sh
+# Publication locks tag and assets. Qualification must never become Latest.
+gh release edit "${RELEASE}" --repo "${REPOSITORY}" \
+  --draft=false --prerelease --latest=false
+gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
+  --jq '{tag_name,draft,prerelease,immutable}'
+# Must retain the same stable release ID/tag recorded before publication.
+gh api "repos/${REPOSITORY}/releases/latest" --jq '{id,tag_name}'
+```
+
+For the UI path, use **Publish release** only after the same checks. Verify the published tag resolves to the approved full SHA. Expected final values are exact tag, `draft: false`, `prerelease: true`, and `immutable: true`, with no **Latest** designation. The latest-release endpoint must return its original stable ID/tag, or remain 404 if no stable release existed. Cluster Management then lists candidate only when it is same or newer than pinned baseline, descends from pinned commit, and passes release-manifest compatibility checks.
+
+??? note "Older qualification source"
+    Source predating central SSH packaging can still use the existing source-only rolling-update qualification path. Omit the packaging commands for that source; it cannot supply the node bootstrap required by SSH onboarding. Never substitute a bundle from another source commit.
 
 Deploy through **Admin > Cluster Management > Updates > Qualification Engine Version**. Qualification action updates whole cluster one node at time, requires `DEPLOY QUALIFICATION`, preserves unsupported warning, and defers contract-phase schema finalization until stable promotion.
 
@@ -122,14 +272,26 @@ gh run list --repo "${REPOSITORY}" \
   --event workflow_dispatch --limit 5
 ```
 
-Wait for matching workflow run to pass. Draft must contain exactly these generated assets:
+Wait for matching workflow run to pass. Current-source draft must contain these generated assets:
 
 - `Install-Engine.sh`
 - `Engine.sh`
 - `borealis-engine-install-manifest.json`
 - `SHA256SUMS`
+- `borealis-node-bootstrap-linux-amd64.tar.gz`
+- `borealis-node-bootstrap-linux-amd64.json`
+- `borealis-node-images-linux-amd64.json`
+- Nine `borealis-node-image-<service>-linux-amd64.oci.tar` production images
+- `borealis-node-k3s-linux-amd64` binary
+- `borealis-node-k3s-install.sh` pinned installer input (not automatically executed)
+- `borealis-node-k3s-images-linux-amd64.tar` bundled K3s images
+- `borealis-node-k3s-linux-amd64.json` input identity and measured image demand
+- Twenty-three `borealis-node-external-<image>-linux-amd64.oci.tar` pinned dependency images
+- `borealis-node-external-images-linux-amd64.json` authenticated external image inventory and measured layer expansion
+- `borealis-node-host-packages-ubuntu-<suite>-linux-amd64.tar` frozen host dependencies for each packaged suite
+- `borealis-node-host-packages-ubuntu-<suite>-linux-amd64.json` corresponding package inventory and source identity
 
-Inspect GitHub digests, download assets, verify checksums, and confirm manifest binds repository, release name, source SHA, platform list, asset URLs, sizes, and hashes.
+Inspect GitHub digests, download assets, verify installer checksums, and confirm manifests bind repository, release name, source SHA, platform, asset URLs, sizes, and hashes. The node bootstrap manifest records its archive and node-manager hashes separately from installer `SHA256SUMS`. Older source without the node packager retains the four-file standalone installer bundle; it cannot supply SSH onboarding assets.
 
 ```sh
 gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
@@ -152,7 +314,7 @@ gh api "repos/${REPOSITORY}/releases/tags/${RELEASE}" \
   --jq '{tag_name,draft,prerelease,immutable,assets:[.assets[]|{name,size,digest}]}'
 ```
 
-Expected final values are exact tag, `draft: false`, `prerelease: false`, `immutable: true`, and four assets with `sha256:` digests. Stable `Install-Engine.sh` rejects release when any identity, immutability, digest, manifest, platform, size, URL, or tag-to-commit check fails.
+Expected final values are exact tag, `draft: false`, `prerelease: false`, `immutable: true`, and all expected assets with `sha256:` digests. Stable `Install-Engine.sh` rejects release when any identity, immutability, digest, manifest, platform, size, URL, or tag-to-commit check fails.
 
 After publication, validate exact release on fresh host using [Deploying Engine](deploying-the-engine.md). Promote qualification cluster through stable whole-cluster action even when stable and qualification tags resolve to same commit; promotion records supported channel and completes pending schema contract phase.
 
@@ -166,6 +328,10 @@ After publication:
 - Focused stable correction: publish next `.HOTFIX` from corrected descendant commit.
 - Normal release correction: publish next monthly revision.
 - Incorrect release notes: edit notes or title without changing tag, assets, or channel.
+
+If a qualification container reports `Permission denied` on its entrypoint, inspect the file in the published image using the workload's runtime UID. An interpreter must be able to read its script as well as traverse the parent directories. Keep the runtime UID and publish corrected image assets under the next candidate tag.
+
+A successful Cluster Management rolling update confirms the selected source revision. During a qualification that requires the published images, compare the running API, controller and frontend image digests and the installed node-manager checksum with the release inventories before confirming new hosts. The standard rolling update can build images locally from the same source.
 
 Do not use deletion as version rollback. Clusters reject older or unrelated targets and stable installer requires exact named release.
 
@@ -182,8 +348,39 @@ Do not use deletion as version rollback. Clusters reject older or unrelated targ
 
     ### Source map
 
-    - `.github/workflows/publish-engine-release-assets.yml` packages stable draft only and refuses non-stable tag, published release, or GitHub pre-release. GitHub's workflow token cannot query immutable-release setting because endpoint requires repository Administration permission; maintainer performs that check before dispatch.
+    - `.github/workflows/publish-engine-release-assets.yml` requires an unpublished draft and matching stable/qualification tag channel. Stable source retains installer packaging; source containing the node packager also builds SSH bootstrap assets. Qualification packaging requires the node packager and omits standalone installer assets. GitHub's workflow token cannot query immutable-release setting because endpoint requires repository Administration permission; maintainer performs that check before dispatch. Qualification from a reviewed unmerged PR dispatches the existing workflow at its exact release tag before publication.
     - `Tests/tools/build_engine_release_assets.py` copies exact tag's `Install-Engine.sh` and `Engine.sh`, writes installer manifest, and generates `SHA256SUMS`.
+    - `Tests/tools/build_node_host_package_assets.py` packages the reviewed AMD64 base/Docker dependency closures from the exact tag’s `internal/clusterbootstrap/host_packages.lock.json` (24.04) and `host_packages.resolute.lock.json` (26.04). It acquires only locked HTTPS URLs or reuses supplied inert archives, checks every size/hash, and emits a deterministic package tar plus source/release-bound inventory through the existing draft-release workflow. Versions are never selected during packaging. Pin updates require authenticated repository metadata, native package metadata and phase evidence; the initial pins match signed Ubuntu/Docker indexes and retained native measurements. The shared Go reader accepts only the compiled plan for the declared suite and verifies every archive member. Content bytes/entries exclude transient, generated and service-start state; these assets alone cannot approve storage or install a host. Other approved Ubuntu variants remain pending corresponding plans/evidence, not removed from support. The existing native host action consumes these assets through its guarded package transport; complete storage readiness remains unavailable until generated, transient and service-start demand is bound.
+    - `Tests/tools/build_node_bootstrap_assets.py` verifies the local tag resolves to the requested full SHA, makes a separate shallow Git clone through Git's protocol, and builds that clone's node manager using Go1.25.12 with Linux/AMD64, CGO disabled, readonly modules and trimmed build paths. Bundle contains clean `source/`, `bin/borealis-node-manager` and `identity.json`; the outer manifest binds archive hash/size and inner source-tree/binary identity. No operator runtime, untracked file, local Git configuration, credential helper, historical revision or working-tree edit is included. Current contract rejects tracked symlinks/submodules before checkout/build. Normalized archive metadata and zero-stat Git index make repeated packaging reproducible. Existing assets are never overwritten; compressed bundle limit256MiB. SBOM records compiler/runtime use.
+    - `Tests/tools/build_node_image_assets.py` builds all nine production roles from a separate exact-tag checkout using a private Buildx docker-container builder. It neither selects the operator's builder nor prunes operator Docker state. Linux/AMD64 OCI exports disable attestations, use gzip layers and carry exact source/service labels. Normalization changes only outer tar metadata and import-reference annotations; manifest/config/layer blobs retain their hashes. Existing output directories are never overwritten. Failed builds remove their own output and builder; the inventory is written only after all images pass the source-built node-manager verifier.
+    - `Tests/tools/node_external_image_inputs.py` selects23 external Linux/AMD64 image inputs from four manifests authenticated by `dependencies.lock`, plus source-pinned kube-vip, snapshot-controller and probe helper. Selection reads executable Pod/init-container fields, Longhorn's six image arguments and six CSI image environment variables, cert-manager's ACME solver argument and system-upgrade-controller's kubectl ConfigMap value. CRD schemas and shell URLs are not image references. Missing indirect inputs, unreviewed image flags/environment, unexpected image counts and foreign registries fail closed. CNPG's actual PostgreSQL runtime remains a separate guarded source digest; K3s version-upgrade images belong to that separate operation.
+    - `Tests/tools/resolve_node_external_images.py` is an explicit maintainer pin-update tool. Supply the source checkout, a directory containing the four checksum-verified dependency manifests, and a new output path. It uses existing Docker Buildx with empty private Docker configuration, public registry reads, bounded metadata,90second per-command deadlines and process-group cleanup. It hashes exact OCI/Docker index bytes, selects exactly one Linux/AMD64 descriptor, fetches that manifest by digest and verifies its exact hash/size. Unsupported platform variants, ambiguous JSON, foreign layer URLs, compression or sizes fail closed. No image layer is downloaded, imported or executed. Review generated pins before replacing `Data/Engine/Containers/api-backend/internal/clusterbootstrap/external_images.lock.json`; never refresh tags automatically during release packaging. Offline policy tests bind checked-in pins to dependency versions/manifests and local helper source hashes.
+    - `Tests/tools/build_node_external_assets.py` packages all23 external images from an isolated exact-tag checkout. `node_registry_download.py` reads public manifests/blobs by reviewed digest using the [OCI Distribution API](https://github.com/opencontainers/distribution-spec/blob/v1.1.1/spec.md). Fixed registry/token origins, bounded anonymous pull tokens, HTTPS verification, explicit CDN destinations (including Docker's [documented CloudFront origin](https://docs.docker.com/desktop/setup/allow-list/) and Kubernetes' [registry CDN](https://github.com/kubernetes/k8s.io/tree/main/infra/fastly/terraform/cdn.registry.k8s.io)), redirect credential stripping, byte/hash checks and deadlines apply. Operator credentials, Docker helpers, proxies and image execution are not used. Cache is private to one run; reused bytes are rehashed. Failed runs remove only their own new output. Tags are never re-resolved.
+    - External OCI archives preserve the exact upstream multi-platform index and materialize only its reviewed Linux/AMD64 child. The source-built node-manager `external-image-proof` independently authenticates the index, selected manifest, config, every blob and expanded DiffID; counts expanded tar bytes/entries using the shared layer scanner; rejects foreign included blobs, missing selected blobs, unexpected aliases, paths, special files, duplicate entries, compression tails and malformed metadata. Other-platform descriptors may remain unmaterialized. No extraction, import or execution occurs. The compiled pin source is shared with the producer; application-specific Borealis labels are not required on third-party images. `ExternalImagePins` decodes and sorts the embedded immutable lockfile once per process, then returns caller-owned scalar records. Caller mutation cannot alter compiled trust data. This cache contains no live source/registry/authority evidence; those observations and validation gates remain fresh.
+    - `internal/clusterbootstrap/external_inventory.go` validates complete, sorted version1 inventories against exact repository/release/source and all23 compiled pins. It checks layer identities/counts and reconstructs unique content bytes/entries; returned projections own their data. Packaging emits this inventory alongside archives, and the draft-only workflow uploads both. These measured artifacts do not grant readiness: guarded delivery and actual source-image/override observation remain S01 work. PostgreSQL is separate and source-specific; native acquisition below consumes the runtime digest from source broker response9, never the operator or Borealis postgres-db image. OS packages, generated host files, runtime growth and aggregate workload fit remain separate requirements.
+    - `internal/clusterbootstrap/postgres_registry.go` and `postgres_image.go` acquire the source-specific PostgreSQL image separately from release assets. Only canonical `ghcr.io/cloudnative-pg/postgresql@sha256:<64 lowercase hex>` is accepted; a tag, foreign repository, zero digest or supplied URL cannot initiate IO. Fixed anonymous GHCR pull scope, system TLS verification, no proxy/cookie/helper, explicit GHCR/CDN redirects and credential stripping apply. Token metadata is bounded32KiB; root/index/manifest/config metadata1MiB; each GET has a five-minute bound within the ten-minute acquisition scope. Errors suppress registry bodies, tokens and signed URLs.
+    - PostgreSQL acquisition preserves the observed root digest, accepting either an OCI/Docker index with exactly one Linux/AMD64 child or a directly observed platform manifest. Digest/length authentication covers all selected metadata and blobs. Native archive verification independently repeats the complete chain, platform/config/DiffID checks and expanded layer measurements under existing2GiB archive,32GiB expansion and one-million-entry limits. `ExternalImageProof.index_digest` is empty for a directly observed platform manifest. Static external images still require all compiled pins; the dynamic path cannot replace them.
+    - Acquisition owns fresh0700 scratch and0600 files, removes temporary blobs after assembling/verifying the inert OCI archive, and removes the entire owned scratch on failure. The opaque `PostgresImage` exposes cloned measured metadata and reuses guarded transfer/cleanup; no path, import or admission grant escapes. Reserved preparation takes its resolved digest from the same frozen source-broker reader used by all later input checks, stages it beside application/external archives, refreshes static publication after acquisition and closes all inputs after consumption. No DB handle remains borrowed across downloads. Preparation dispatch and target import remain gated. Before bulk config/layer downloads, acquisition authenticates the complete descriptor set and physically allocates every destination blob and the exact padded OCI archive with Linux `fallocate`. Reservations are the eventual files, so another acquisition cannot spend the same blocks; no sparse or non-Linux fallback exists. Allocation/space/quota failures, cancellation or authority loss remove only owned scratch. Small bounded root/manifest reads precede bulk reservation. Every fetch is independently size-limited and SHA256-checked before its bytes can select further inputs. Native verification must reproduce reserved archive size and unique content totals. Temporary blob reservations are removed only after verification; the archive remains owned through consumption. This reserves PostgreSQL file blocks/inodes only, not OS metadata/runtime headroom or other preparation inputs.
+    - `PostgresImage.StorageDemand` requires the still-owned archive, rehashes bytes under fresh caller checks and serializes with cleanup; a copied `Proof()` cannot supply this capability. Reserved preparation merges its incoming archive and two retained archives/content/expanded-layer demand with application/K3s/external target demand, while reporting acquisition-worker peak content-plus-archive bytes and entries separately. Repeated layers receive no expansion discount. Existing target filesystem budgeter adds allocation/inode reserves and aggregates shared paths; PGDATA remains separate volume demand. The same frozen broker reader checks original source/cohort before and after consumption, and the archive is rechecked after the consumer. These remain conditional budgets. The read-only qualification worker now acquires the same inert source-bound archive under its joined inspection scope, remeasures before and after target capacity checks, and releases owned scratch before success. Failed acquisition, source/authority drift, changed measurement or cleanup failure blocks the check; complete image capacity and mutation authority are not granted. Combined worker/target filesystem fit, OS/runtime/workload headroom and write-boundary space checks remain required before readiness; current per-set reservation and composed scratch totals are described below.
+    - `Tests/tools/build_node_k3s_assets.py` uses its own exact-tag checkout, requires `release-manifest.json` to match the embedded `internal/clusterbootstrap/k3s_inputs.lock.json`, and downloads only the pinned public K3s binary, uncompressed airgap archive and version-matched installer script. Installer bytes come from the pinned version source with an independent checksum; mutable `get.k3s.io` content is not a packaging input. Exact sizes/SHA256 values come from reviewed source, not current upstream metadata. Only one HTTPS GitHub release-asset redirect is allowed; requests carry no credentials and failures suppress signed URLs. The source-built helper scans the archive before writing the inventory; output is never overwritten and failed packaging removes only its newly created output. K3s is never executed or imported. Workflow uploads all four inputs to the unpublished draft alongside application assets.
+    - `k3s_inputs.go` hashes the complete pinned archive and every content blob, checks the complete eight-image set and Linux/AMD64 configs, then measures each gzip layer against its DiffID. Repeated layers receive no expansion/entry discount. Exact archive authentication also binds the upstream OCI indexes and their selected platform. This parser is specific to the source-pinned K3s archive, not a general multi-platform importer. Shared layer validation accepts explicit `./` prefixes, canonicalizes them before duplicate checks and still rejects traversal, special/sparse members and concatenated gzip. Baseline upgrades must update reviewed input pins and prove the new archive; changing only a version string cannot pass.
+    - K3s inventory version2 additionally binds the embedded runtime payload. The reviewed binary lock records its exact zstd frame offset/size/hash and expanded tar hash/bytes/file bytes/entry/CNI-link counts. Packaging verifies the complete binary first, copies only that authenticated frame into private scratch, decodes with `zstd` under memory/output/time bounds, hashes all expanded bytes and scans tar entries without extraction or execution. Links stay inert and must resolve within the payload root. Failed/expired decoder processes are killed and joined. This avoids accidentally reusing an installed K3s runtime: the upstream launcher may fall back to its default data directory even when a different data directory was requested. Frame identity and extraction behavior follow the pinned [packaging script](https://github.com/k3s-io/k3s/blob/v1.36.3%2Bk3s1/scripts/package-cli) and [launcher](https://github.com/k3s-io/k3s/blob/v1.36.3%2Bk3s1/cmd/k3s/main.go). Any binary/payload change requires reviewed pins and remeasurement, not a guessed expansion ratio. The same lock separately pins `server_executable` to the exact `bin/k3s` tar member (size223143160, SHA256 `0d09dd62a17a42ddde4ffc2ac68547a574fdc3fb9e6b371e8c1865fd277f4455`); measurement rejects missing, linked, differently sized or changed member bytes. This supports native running-executable verification because the launcher execs the embedded server. The member remains part of existing payload totals; inventory version2, asset identities and calculated demand do not change. Re-derive this member pin from the authenticated payload when reviewing a K3s upgrade, never from an installed host.
+    - `cluster_ssh_external_images.go` resolves the complete23-image asset set and small inventory from the exact immutable publication, compares every archive size/hash and refreshes publication identities around existing source/cohort capacity scope. Conditional demand includes incoming archives, two retained archive generations, unique content within each image and every expanded layer, with no cross-image deduplication credit. Shared filesystem budgets add byte and inode reserves together with application and K3s demands. Missing assets, tampered inventories, moved tags, asset drift or cancellation stop the scope. Source-specific PostgreSQL, actual external overrides, host files and workload fit remain required before readiness. Resolution downloads metadata only. Reserved preparation now stages all23 archives through `StageExternalImages` in private0700 scratch with0600 files, exact size/hash and independent native index/manifest/config/layer measurement. Source/cohort/claim checks bracket each archive; publication identity is refreshed around staging and consumption. `ExternalImageSet.WriteArchive` rehashes before emission and during transfer, checks inode/size/mtime and final authority, and serializes transfer with cleanup. Errors remove only owned scratch; the receiver must keep even complete transferred bytes inert until independent verification and authority checks succeed. Opener/writer transports must honor cancellation and join their IO. The production preparation worker borrows these owned sets for supervised target transfer and import; original readiness, claim, journal and admission gates remain required.
+    - `image_stage_reserve.go` and `image_reserve_linux.go` now reserve every application/external archive destination in each complete set before that set's first bulk fetch. Allocation uses measured archive sizes, real Linux `fallocate`, exclusive0600 files and held descriptors under new0700 scratch. Unsupported allocation, quota/space failure, cancellation or original-authority loss blocks downloads and removes only owned scratch. Named path/inode/size/mode checks before and after receive reject replaced reservations; full hashes and native remeasurement still apply. Descriptors close before set export or failure cleanup. PostgreSQL uses the same allocation primitive with its existing descriptor/content/archive reservation contract. There is no sparse or non-Linux fallback. Each set is reserved sequentially while prior preparation inputs remain owned; this is not a single advance reservation of every future preparation phase or proof of OS/runtime headroom.
+    - `scratch_capacity.go` checks the held worker filesystem before each application/external set, PostgreSQL bulk reservation, compressed bootstrap body and authenticated expanded-tree extraction. Linux `fstatfs` supplies currently available bytes/inodes and allocation units; remaining logical bytes plus one allocation unit per new entry must fit with spare bytes/inodes. Already-owned archives/metadata consume current availability and are not charged twice. Invalid/missing inode evidence, read-only storage, overflow or insufficient space blocks staging; no fixed host minimum. Subsequent real file allocation still catches quotas and competing writes. These phase-local checks do not reserve all future phases or establish runtime growth/headroom; the full preparation projection remains separate.
+    - `PreparationInputs.StorageDemand` measures the still-owned authenticated bootstrap archive plus declared extracted file bytes and every directory/file entry, rechecking actual bundle/source/authority before and after measurement. `cluster_ssh_worker_capacity.go` composes that demand with all nine application archives,23 external archives, retained K3s inputs, the host-package tar and owned directories, and PostgreSQL acquisition's content-plus-archive peak. Reserved preparation passes `WorkerScratchBytes`/`WorkerScratchEntries` to its synchronous consumer, then remeasures bootstrap and PostgreSQL inputs before accepting completion. These per-attempt logical totals stay separate from target generations, expanded image layers and PGDATA; no deduplication or guessed host minimum. Reserved preparation stages K3s and host-package bytes under the same owned scope. Before each target's first native preparation dispatch, the claimed worker checks its target demand against fresh persistent filesystem evidence and joins observation cleanup. This remains separate from complete preclaim storage readiness and runtime headroom; see [Managing Engine Clusters](managing-engine-clusters.md#immutable-artifacts-before-preparation-approval).
+    - `cluster_ssh_k3s.go` resolves the four immutable Borealis release assets, compares binary/archive identities with compiled pins and reads only the small inventory during qualification. Fresh source baseline, publication identities and all target claims bracket capacity observation. K3s demands include incoming inputs, two retained binary/archive generations, content blobs, measured expanded image entries and two embedded-runtime generations with additional data/current/previous/lock/CNI entries; paths sharing a filesystem share one budget. The inventory remains conditional: installer-generated host files, OS packages, actual external overrides, PostgreSQL, runtime growth and remaining metadata reserves are not yet complete. The preparation source scope stages K3s bytes and the supervised native worker delivers them through existing journaled installation and startup phases. Those phases retain original source, claim, readiness and admission gates. The fixed installer follows K3s's [offline installation contract](https://docs.k3s.io/installation/airgap), with these independently pinned installer bytes and existing controller authority. Merely packaging the script does not authorize executing it or starting/enabling K3s.
+    - `internal/clusterbootstrap/image_archive.go` scans without extraction or execution. It checks every outer byte, blob digest/length, config platform/source/role, image reference, layer DiffID and measured compressed/expanded/file/entry counts. Limits are2GiB minus one byte per archive,32GiB expanded tar and one million entries per image,128layers and512KiB inventory. Unsupported OCI forms, duplicate/case-aliased JSON, invalid UTF-8, extra blobs, unsafe paths, special/sparse layers and concatenated gzip fail. Container symlinks remain inert archive data. `image_inventory.go` requires the exact sorted nine-role set and compares all measured fields after download.
+    - `cluster_ssh_images.go` resolves fresh immutable publication and asset identities, downloads the small inventory before capacity observation, and binds its measured application-image demand to original source/cohort checks. `image_stage.go` then stages a complete image generation in private scratch, hashes incoming streams and independently measures archives. Failed sets are removed; export rehashes bytes before and during synchronous transfer, brackets it with authority checks and exposes no paths. The preparation-source scope retains joined lease cancellation and owns cleanup. The source acquisition code imports no archive; target receivers verify bytes before supervised native consumption. Application-image demand is conditional: OS packages, actual source-image overrides, PostgreSQL, remaining filesystem metadata/inode reserves and runtime reserves still require complete evidence before readiness.
+    - `Tests/tools/retain_engine_release.py --release TAG --source-sha COMMIT --references DIR` resolves an immutable GitHub publication and verifies its tag. It streams missing assets into the bounded Engine object store and atomically publishes a reference directory after all assets match their published digests. Optionally pass `--local-assets DIR` for already downloaded bytes. Reusing a release still checks current publication authority. Keep the authenticated acquisition process separate from compilation and expose only read-only retained assets to build workers. Use a provisioned filesystem that reports available bytes and inodes and supports hard links.
+    - The authenticated preparation release broker can serve pre-acquired bytes from a privately provisioned read-only object directory (`BOREALIS_ENGINE_VERIFIED_OBJECTS`). Select a single published asset using its independently verified SHA-256 and size. The host-side `Tests/tools/node_artifact_cache.py --artifact FILE --sha256 DIGEST --bytes SIZE --reference-directory DIR` command retains it under the configured build cache budgets. Keep the reference directory private and on the cache filesystem. A reference holds the bytes across ordinary cache eviction. Pin active, staged and recovery artifacts for their entire lifetimes. Mount only the inert object directory read-only to the API runtime with sufficient read access. The broker authenticates the operation and release before every transfer and withholds the final encrypted block on content mismatch. Missing objects use the established GitHub path. This optional read path has no effect on credentials, claims or release eligibility.
+    - `cluster_ssh_bootstrap.go` refreshes published immutable GitHub release/channel/tag/source identity independently of picker cache. It requires unique uploaded manifest/archive asset IDs, exact repository URLs, positive bounded sizes and GitHub SHA256 digests. Strict metadata rejects duplicate keys, case aliases and null authorization fields; strict manifests additionally reject unknown/missing fields, invalid UTF-8 and trailing JSON. Qualification requires explicit operation opt-in. Release compatibility/ancestry and controller authority remain caller requirements.
+    - [GitHub release asset API](https://docs.github.com/en/rest/releases/assets) returns binary200 or302. Bootstrap downloads use authenticated API asset IDs, then at most one fresh unauthenticated request to the exact HTTPS `release-assets.githubusercontent.com/github-production-release-asset/` destination. No Authorization, cookie or Referer reaches CDN; signed URL and remote error text stay out of diagnostics. Redirects from metadata endpoints, second asset redirects, content encoding, changed Content-Length, sizes or digests fail closed. Existing API-base override remains trusted deployment/test configuration; manifest URLs never choose download authority.
+    - `internal/clusterbootstrap` hashes compressed input before scanning. It bounds manifests16KiB, archive256MiB, expansion1GiB and entries20000, rejects links/special files, unsafe paths, duplicates, unsupported Git metadata, gzip concatenation/trailing bytes and checksum errors. Complete scan verifies inner identity and node-manager digest before any extraction. New private0700 scratch contains regular files only; failed scratch is removed and successful caller must close it after transfer. Bootstrap staging physically allocates the manifest-bound compressed archive before consuming its body, then allocates each authenticated nonempty extracted file before writing it. Empty files consume inodes only. HTTP opening precedes staging; this does not promise allocation before the request. Linux allocation/space/quota failure or cancellation removes only owned scratch; no sparse or non-Linux fallback. The authenticated scan supplies complete expanded-tree bytes and entries for a filesystem check before extraction; worker runtime headroom remains separate.
+    - `image_transfer.go` frames one bounded inventory, its nine exact-length archives and an inventory-digest trailer. The target independently verifies the expected release and every archive into fresh private scratch; interrupted sets never reach the consumer. It leaves later protocol frames unread. Transport owns cancellation of blocked IO and must retain host-key/lease supervision. `RuntimeManifest` emits existing schema1 services with digest-pinned workload references and a separate release-tag archive reference; the legacy hash field contains the image manifest digest, not a local-build cache key.
+    - `image_install_linux.go` publishes verified archives to the fixed K3s image directory and writes the existing node image manifest under a supervised `stage_images` journal intent. It requires recorded source, shared identity and host preparation, rejects joined hosts, uses owned non-symlink directories, fsyncs files/directories and never replaces existing names. It retains existing image generations. A failed partial publication remains outcome_unknown; a fresh executor may reconcile success only by reading all archive bytes and exact manifest after predecessor quiescence. This proves file publication, not containerd readiness. K3s's [native importer](https://github.com/k3s-io/k3s/blob/v1.36.3%2Bk3s1/pkg/agent/containerd/containerd.go) supplies pin/distribution labels and repository-digest aliases when loading archives. The production prejoin dispatcher uses the supervised journal phases for delivery, startup and native image verification. Original readiness and claimed storage checks precede effects; image publication alone cannot grant admission.
+    - Source verification checks fixed Git config and exact HEAD/shallow boundaries before invoking trusted host Git with inherited `GIT_*` settings removed, hooks/fsmonitor disabled, network protocols disabled, bounded output and45second command deadlines. `fsck`, original tag, source tree and single commit must match; every tracked regular file/mode/blob is compared without executing source filters. ELF/Go build metadata must match LinuxAMD64/CGO0/Go1.25.12 and node-manager module path. Archive and source verification run under the download caller's five-minute context. Git already ships in API runtime; callers in other runtime images must supply it before enabling this path.
+    - The packaging tool does not attest publication or authorize a host mutation. The controller and API executor now compose confirmed preparation, exact cohort claims and the native prejoin worker. Missing complete persistent-storage evidence still blocks production approval; packaging cannot bypass that gate or grant admission. See [Managing Engine Clusters](managing-engine-clusters.md#immutable-artifacts-before-preparation-approval) for current preparation boundaries.
     - `Install-Engine.sh` accepts only published, non-prerelease, immutable stable release and validates GitHub plus manifest identities before invoking `Engine.sh`.
     - `Data/Engine/release-manifest.json` controls cluster release compatibility independently from standalone installer manifest.
     - `Data/Engine/Containers/api-backend/cmd/api-backend/server_cluster.go` requires published `immutable: true` metadata and matching channel, resolves the tag once, reads the compatibility manifest through that full SHA, and verifies ancestry. Queue requests refresh publication metadata independently of the picker cache. Redirects, oversized or trailing JSON, unavailable metadata, and missing/mismatched manifests fail closed.

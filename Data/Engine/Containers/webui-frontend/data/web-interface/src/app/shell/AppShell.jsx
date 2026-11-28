@@ -795,6 +795,11 @@ export default function AppShell() {
               minWidth: 0,
             }}
           >
+            {clusterBanner?.release_channel === "development" && /^dev-[0-9a-f]{64}$/.test(clusterBanner.baseline_release || "") ? (
+              <Alert severity="warning" variant="filled" sx={CLUSTER_BANNER_SX}>
+                Unsupported development snapshot {clusterBanner.baseline_release}. Full release validation is pending.
+              </Alert>
+            ) : null}
             {showClusterBanner && clusterBanner?.hmr_state && clusterBanner.hmr_state !== "inactive" ? (
               <Alert severity="warning" variant="filled" onClose={dismissClusterBanner} sx={CLUSTER_BANNER_SX}>
                 Cluster-Wide Node Isolation enabled. All Borealis application traffic will run exclusively through {String(clusterBanner?.hmr_node_name || "isolated node").trim()}. All remaining cluster nodes will remain on standby until node isolation has been disabled.

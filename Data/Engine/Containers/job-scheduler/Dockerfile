@@ -16,6 +16,6 @@ COPY Data/Engine/Containers/api-backend/dist/api-backend /usr/local/bin/borealis
 COPY Data/Engine/Containers/job-scheduler/entrypoint.sh /usr/local/bin/borealis-job-scheduler
 COPY Data/Engine/Containers/job-scheduler/healthcheck.sh /usr/local/bin/borealis-job-scheduler-healthcheck
 
-RUN chmod +x /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-job-scheduler /usr/local/bin/borealis-job-scheduler-healthcheck
+RUN chmod 0755 /usr/local/bin/borealis-api-backend-go /usr/local/bin/borealis-job-scheduler /usr/local/bin/borealis-job-scheduler-healthcheck
 
 ENTRYPOINT ["/usr/local/bin/borealis-job-scheduler"]

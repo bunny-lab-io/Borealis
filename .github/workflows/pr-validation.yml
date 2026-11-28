@@ -77,7 +77,7 @@ jobs:
       - name: Install policy tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes shellcheck
+          sudo apt-get install --yes shellcheck zstd
           python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
           GOBIN="$RUNNER_TEMP/bin" go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
@@ -132,25 +132,43 @@ jobs:
           if-no-files-found: ignore
 
   engine-go:
-    name: Engine / go-runtimes
+    name: Engine / go-runtimes / ${{ matrix.lane }}
     needs: changes
     if: needs.changes.outputs.engine_go == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: ubuntu-24.04
+    # Allow setup, the bounded race suite, and runtime builds.
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        lane: [static, packages, api1, api2, api3, api4]
+    outputs:
+      static: ${{ steps.lane.outputs.static }}
+      packages: ${{ steps.lane.outputs.packages }}
+      api1: ${{ steps.lane.outputs.api1 }}
+      api2: ${{ steps.lane.outputs.api2 }}
+      api3: ${{ steps.lane.outputs.api3 }}
+      api4: ${{ steps.lane.outputs.api4 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
-      - run: ./Tests/run-engine-go.sh
+      - name: Install isolated Netplan fixture dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes netplan.io python3-netplan python3-yaml
+      - id: lane
+        run: ./Tests/run-engine-go.sh
         env:
           CGO_ENABLED: "1"
           BOREALIS_ENGINE_GO_RACE: "1"
+          BOREALIS_ENGINE_GO_LANE: ${{ matrix.lane }}
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
-          name: engine-go-results
+          name: engine-go-results-${{ matrix.lane }}
           path: Unit_Test_Results/
           if-no-files-found: ignore
 
@@ -197,11 +215,25 @@ jobs:
           if-no-files-found: ignore
 
   database:
-    name: Database / postgres-17
+    name: Database / postgres-17 / shard ${{ matrix.shard }}
     needs: changes
     if: needs.changes.outputs.database == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Include setup, bounded expanded race coverage, and diagnostic upload.
+    timeout-minutes: 70
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+    outputs:
+      shard_1: ${{ steps.database.outputs.shard_1 }}
+      shard_2: ${{ steps.database.outputs.shard_2 }}
+      shard_3: ${{ steps.database.outputs.shard_3 }}
+      shard_4: ${{ steps.database.outputs.shard_4 }}
+      shard_5: ${{ steps.database.outputs.shard_5 }}
+      shard_6: ${{ steps.database.outputs.shard_6 }}
+      shard_7: ${{ steps.database.outputs.shard_7 }}
+      shard_8: ${{ steps.database.outputs.shard_8 }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
@@ -213,11 +245,16 @@ jobs:
           python-version: "3.12"
           cache: pip
           cache-dependency-path: Data/Engine/Containers/site-worker/data/engine-requirements.txt
-      - run: ./Tests/run-database-postgres.sh
+      - id: database
+        run: ./Tests/run-database-postgres.sh
+        env:
+          BOREALIS_POSTGRES_SHARD: ${{ matrix.shard }}
+          CGO_ENABLED: "1"
+          GOFLAGS: -race
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: database-results
+          name: database-results-${{ matrix.shard }}-attempt-${{ github.run_attempt }}
           path: |
             Unit_Test_Results/database-postgres-*/*.log
             Unit_Test_Results/database-postgres-*/postgres-go-results.jsonl
@@ -228,13 +265,16 @@ jobs:
     needs: changes
     if: needs.changes.outputs.runtime_policy == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: 1.25.12
-          cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
+          # Both toolchains share Go's module/build paths; restore them once.
+          cache-dependency-path: |
+            Data/Engine/Containers/api-backend/go.sum
+            Tests/tools/admissionpolicy/go.sum
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
@@ -242,6 +282,11 @@ jobs:
           cache-dependency-path: Tests/requirements-policy.txt
       - run: python -m pip install --disable-pip-version-check -r Tests/requirements-policy.txt
       - run: ./Tests/run-k3s-policy.sh
+      - uses: actions/setup-go@v7
+        with:
+          go-version: 1.26.8
+          cache: false
+      - run: ./Tests/run-admission-policy.sh
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
@@ -263,7 +308,13 @@ jobs:
         with:
           go-version: 1.25.12
           cache-dependency-path: Data/Engine/Containers/api-backend/go.sum
-      - run: ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+      - name: Build selected images
+        run: |
+          if [[ "$BOREALIS_CI_FORCE_ALL" == "true" ]]; then
+            ./Tests/run-containers.sh --all
+          else
+            ./Tests/run-containers.sh --base "$BOREALIS_CI_BASE" --head "$BOREALIS_CI_HEAD"
+          fi
       - uses: actions/upload-artifact@v7
         if: failure()
         with:
@@ -327,16 +378,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
+      - uses: actions/checkout@v7
       - name: Require successful applicable checks
         env:
           BOREALIS_NEEDS_JSON: ${{ toJSON(needs) }}
-        run: |
-          python3 - <<'PY'
-          import json, os, sys
-          needs = json.loads(os.environ["BOREALIS_NEEDS_JSON"])
-          bad = {name: value["result"] for name, value in needs.items() if value["result"] not in {"success", "skipped"}}
-          if bad:
-              print("Required validation failed:", bad, file=sys.stderr)
-              raise SystemExit(1)
-          print("All applicable PR validation jobs passed.")
-          PY
+        run: python3 -m Tests.policy.check_required_jobs

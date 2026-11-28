@@ -23,7 +23,11 @@
     "Tests/tools/routeinventory/**",
     "Tests/manifests/api-routes.json",
     "Tests/policy/check_api_routes.py",
-    ".github/workflows/pr-validation.yml"
+    ".github/workflows/pr-validation.yml",
+    "Tests/helpers/engine_go_shard.py",
+    "Tests/manifests/engine-api-timings.json",
+    "Tests/policy/check_required_jobs.py",
+    "Tests/manifests/postgres-tests.json"
   ],
   "engine-python": [
     "Data/Engine/Containers/site-worker/data/**/*.py",
@@ -59,6 +63,8 @@
     "Data/Engine/Containers/api-backend/go.sum",
     "Tests/manifests/postgres-tests.json",
     "Tests/policy/check_postgres_inventory.py",
+    "Tests/policy/check_required_jobs.py",
+    "Data/Engine/Unit_Tests/test_worker_admission.py",
     "Tests/tools/postgresinventory/**",
     "Tests/Unit_Tests/test_postgres_inventory.py",
     "Tests/helpers/changed_paths.py"
@@ -70,6 +76,10 @@
     "Docs/Reference/Core Runtimes/Stack_Breakdown.md",
     "Docs/Engine/deploying-the-engine.md",
     "Tests/run-k3s-policy.sh",
+    "Tests/run-admission-policy.sh",
+    "Tests/tools/admissionpolicy/**",
+    "Data/Engine/K3s/cluster/render-longhorn-instance-manager.py",
+    "Data/Engine/K3s/cluster/render-system-upgrade.py",
     "Tests/requirements-policy.txt",
     "Tests/policy/check_k3s_manifests.py",
     "Tests/policy/check_api_cutover.py",

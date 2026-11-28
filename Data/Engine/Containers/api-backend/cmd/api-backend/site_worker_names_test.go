@@ -1,9 +1,34 @@
 package main
 
 import (
+	"math"
 	"strings"
 	"testing"
 )
+
+func TestSiteWorkerServiceReservationUsesImmutableSiteID(t *testing.T) {
+	for _, name := range []string{"Original Site", "Renamed Site", "!!!", strings.Repeat("a", 100)} {
+		for _, guid := range []string{newClusterUUID(), newClusterUUID()} {
+			if got := siteWorkerServiceNameForSite(7, name, guid); got != "site-worker-site-7" {
+				t.Fatalf("mutable input changed reservation: %q", got)
+			}
+			if siteWorkerPodNameForSite(7) != siteWorkerServiceNameForSite(7, name, guid) {
+				t.Fatal("primary Pod and Service reservation names differ")
+			}
+		}
+	}
+	for _, site := range []int64{1, 42, math.MaxInt64} {
+		name := siteWorkerServiceNameForSite(site, "Same Name", "same-guid")
+		if !borealisOperatorKubernetesObjectNameAllowed(name) || name == siteWorkerServiceNameForSite(site-1, "Same Name", "same-guid") {
+			t.Fatalf("invalid or aliased site reservation %d: %q", site, name)
+		}
+	}
+	for _, site := range []int64{0, -1} {
+		if got := siteWorkerServiceNameForSite(site, "Named Site", "worker"); got != "" {
+			t.Fatalf("invalid site accepted: %q", got)
+		}
+	}
+}
 
 func TestSiteWorkerNameForSiteUsesSanitizedSiteSlug(t *testing.T) {
 	workerGUID := "4f4e4578-23c9-4e5f-bfa9-ce99a6f0b78c"

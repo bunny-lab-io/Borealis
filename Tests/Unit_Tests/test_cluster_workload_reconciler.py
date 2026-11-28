@@ -17,6 +17,31 @@ MODULE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(MODULE)
 
 
+class ClusterReleaseSchemaTests(unittest.TestCase):
+    def test_snapshot_digest_and_previous_release_limits_on_all_projections(self):
+        import yaml
+
+        documents = yaml.safe_load_all((MODULE_PATH.parent / "crds.yaml").read_text())
+        fields = {"BorealisCluster": "baselineRelease", "BorealisNodeRuntime": "desiredRelease",
+                  "BorealisClusterOperation": "targetRelease"}
+        for crd in documents:
+            kind = crd["spec"]["names"]["kind"]
+            if kind not in fields:
+                continue
+            with self.subTest(kind=kind):
+                schema = crd["spec"]["versions"][0]["schema"]["openAPIV3Schema"]
+                field = schema["properties"]["spec"]["properties"][fields.pop(kind)]
+                self.assertEqual((field["type"], field["maxLength"]), ("string", len("dev-" + "a" * 64)))
+                legacy, snapshot = field["anyOf"]
+                self.assertEqual(legacy["maxLength"], 32)
+                if kind == "BorealisCluster":
+                    self.assertRegex("2026.11.1-rc.30", legacy["pattern"])
+                    self.assertRegex("dev-0123456789ab", legacy["pattern"])
+                    self.assertNotRegex("arbitrary", legacy["pattern"])
+                self.assertEqual(snapshot, {"pattern": "^dev-[0-9a-f]{64}$"})
+        self.assertFalse(fields)
+
+
 def patched_generic_deployment(container_name: str, image: str, revision: str) -> str:
     return json.dumps(
         {
@@ -33,6 +58,51 @@ def patched_generic_deployment(container_name: str, image: str, revision: str) -
 
 
 class ClusterWorkloadReconcilerTests(unittest.TestCase):
+    def test_development_mount_requires_local_opt_in(self):
+        pod, container = {}, {}
+        for enabled in (True, True, False, True):
+            MODULE.mount_development_catalog(pod, container, enabled)
+            self.assertEqual(len(pod["volumes"]), int(enabled))
+            self.assertEqual(len(container["env"]), int(enabled))
+            self.assertEqual(len(container["volumeMounts"]), int(enabled))
+        self.assertTrue(container["volumeMounts"][0]["readOnly"])
+        self.assertEqual(pod["volumes"][0]["hostPath"]["type"], "Directory")
+        container["volumeMounts"][0]["readOnly"] = False
+        with self.assertRaisesRegex(RuntimeError, "conflicting"):
+            MODULE.mount_development_catalog(pod, container, True)
+
+    def test_cluster_scratch_preserves_existing_mounts_and_rejects_conflicts(self) -> None:
+        path = "/var/tmp/borealis-cluster"
+        memory = {"name": "tmp", "emptyDir": {"medium": "Memory", "sizeLimit": "128Mi"}}
+        mount = {"name": "tmp", "mountPath": "/tmp"}
+        pod = {"volumes": [memory]}
+        container = {"volumeMounts": [mount]}
+        for _ in range(2):
+            MODULE.mount_cluster_scratch(pod, container)
+        self.assertEqual(pod["volumes"], [memory, {"name": "cluster-scratch", "emptyDir": {}}])
+        self.assertEqual(container["volumeMounts"], [mount, {"name": "cluster-scratch", "mountPath": path}])
+        self.assertEqual(container["env"], [{"name": "BOREALIS_CLUSTER_SCRATCH_DIR", "value": path}])
+        for volume, extra_mount in [
+            ({"name": "cluster-scratch", "emptyDir": {"medium": "Memory"}}, []),
+            ({"name": "cluster-scratch", "hostPath": {"path": "/tmp"}}, []),
+            (memory, [{"name": "tmp", "mountPath": path}]),
+        ]:
+            with self.subTest(volume=volume, mounts=extra_mount), self.assertRaises(RuntimeError):
+                MODULE.mount_cluster_scratch({"volumes": [volume]}, {"volumeMounts": extra_mount})
+
+    def test_api_identity_custody_uses_actual_pod_and_node(self) -> None:
+        fields = {"BOREALIS_ENGINE_NODE_NAME": "spec.nodeName", "BOREALIS_ENGINE_POD_NAME": "metadata.name", "BOREALIS_ENGINE_POD_UID": "metadata.uid"}
+        for candidate in (False, True):
+            source = {"metadata": {}, "spec": {"template": {"metadata": {}, "spec": {"containers": [{"name": "api-backend", "startupProbe": {"periodSeconds": 2, "failureThreshold": 30}, "livenessProbe": {"initialDelaySeconds": 0}, "env": [{"name": name, "value": "copied-source"} for name in fields for _ in range(2)]}]}}}}
+            with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(MODULE, "cluster_virtual_ip", return_value="192.168.3.248"), mock.patch.object(MODULE, "kubectl", return_value="") as kubectl:
+                MODULE.reconcile_one("api-backend", "api-backend", "engine-2", "a" * 40, {"api-backend": "borealis/api-backend@sha256:" + "b" * 64}, candidate)
+            manifest = json.loads(next(call.kwargs["stdin"] for call in kubectl.call_args_list if "apply" in call.args))
+            env = manifest["spec"]["template"]["spec"]["containers"][0]["env"]
+            self.assertIn({"name": "BOREALIS_CLUSTER_SCRATCH_DIR", "value": "/var/tmp/borealis-cluster"}, env)
+            for name, field in fields.items():
+                self.assertEqual([entry for entry in env if entry["name"] == name], [{"name": name, "valueFrom": {"fieldRef": {"apiVersion": "v1", "fieldPath": field}}}])
+            self.assertEqual(next(entry["value"] for entry in env if entry["name"] == "BOREALIS_API_BACKGROUND_LOOPS"), "0" if candidate else "1")
+
     def test_aegis_trust_bootstrap_preserves_existing_policy(self) -> None:
         with mock.patch.object(MODULE, "kubectl", return_value='{"data":{"ca-bundle.crt":"old+new"}}') as kubectl:
             MODULE.ensure_aegis_trust_bundle()
@@ -165,25 +235,25 @@ class ClusterWorkloadReconcilerTests(unittest.TestCase):
             return ""
 
         image = "borealis-engine/api-backend:sha-" + "b" * 12
-        with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(
-            MODULE, "kubectl", side_effect=fake_kubectl
-        ):
-            MODULE.reconcile_one(
-                "borealis-cluster-controller",
-                "api-backend",
-                "engine-02",
-                "a" * 40,
-                {"api-backend": image},
-                True,
-            )
-
-        manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
-        environment = {
-            item["name"]: item.get("value")
-            for item in manifest["spec"]["template"]["spec"]["containers"][0]["env"]
-        }
-        self.assertEqual(environment["BOREALIS_CLUSTER_ACTION_IMAGE"], image)
-        self.assertEqual(environment["BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE"], "false")
+        for previous, expected in (("500m", "1500m"), ("2", "2")):
+            with self.subTest(cpu=previous):
+                calls.clear()
+                source["spec"]["template"]["spec"]["containers"][0]["resources"] = {
+                    "requests": {"cpu": "50m"}, "limits": {"cpu": previous, "memory": "256Mi"},
+                }
+                with mock.patch.object(MODULE, "load_json", return_value=source), mock.patch.object(
+                    MODULE, "kubectl", side_effect=fake_kubectl
+                ):
+                    MODULE.reconcile_one(
+                        "borealis-cluster-controller", "api-backend", "engine-02", "a" * 40, {"api-backend": image}, True
+                    )
+                manifest = json.loads(next(stdin for args, stdin in calls if args[:2] == ("apply", "--server-side")))
+                controller = manifest["spec"]["template"]["spec"]["containers"][0]
+                self.assertEqual(controller["resources"], {"requests": {"cpu": "50m"}, "limits": {"cpu": expected, "memory": "256Mi"}})
+                environment = {item["name"]: item.get("value") for item in controller["env"]}
+                self.assertEqual(environment["BOREALIS_CLUSTER_SCRATCH_DIR"], "/var/tmp/borealis-cluster")
+                self.assertEqual(environment["BOREALIS_CLUSTER_ACTION_IMAGE"], image)
+                self.assertEqual(environment["BOREALIS_CLUSTER_CONTROLLER_ELIGIBLE"], "false")
 
     def test_reconcile_refreshes_node_clone_from_generic_template(self) -> None:
         stale_image = "borealis-engine/site-worker:sha-" + "a" * 12
