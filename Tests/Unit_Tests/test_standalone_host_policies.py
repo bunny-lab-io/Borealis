@@ -79,6 +79,40 @@ class StandaloneHostTests(unittest.TestCase):
         for ending in ("", "1x", "12345678901", "2/other"):
             self.assertIsNone(generation.fullmatch("2026_11_28_06_17_08." + ending))
 
+    def test_existing_projected_policy_gains_only_the_standalone_key_read(self):
+        prior = policy.projected_wireguard_key_rule()
+        rule = b"  /opt/Borealis/Engine/Services/wireguard-tunnel/secrets/server_private.key r,\n"
+        self.assertEqual(policy.WG_STANDALONE_KEY, rule)
+        combined = prior + rule
+        digest = hashlib.sha256(combined).hexdigest()
+        for fail_reload in (False, True):
+            with self.subTest(fail_reload=fail_reload), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                include = root / "local"
+                include.write_bytes(prior)
+                evidence = root / "wg"
+                evidence.mkdir()
+                (evidence / "compiled.original").write_bytes(b"vendor")
+                reloads = [None] if not fail_reload else [RuntimeError("reload failed"), None]
+                with patch.object(policy, "EVIDENCE", root), \
+                        patch.object(policy, "WG_PROJECTED_HASH", hashlib.sha256(prior).hexdigest()), \
+                        patch.object(policy, "compiled", side_effect=lambda _: include.read_bytes()), \
+                        patch.object(policy, "verify_kernel") as verify, \
+                        patch.object(policy.subprocess, "run", side_effect=reloads):
+                    args = ("wg", include, root / "vendor", root / "vendor", combined,
+                            hashlib.sha256(b"vendor").hexdigest(), digest, 0)
+                    if fail_reload:
+                        with self.assertRaisesRegex(RuntimeError, "reload failed"):
+                            policy.reconcile(*args)
+                    else:
+                        policy.reconcile(*args)
+                        policy.reconcile(*args)
+                    expected = prior if fail_reload else combined
+                    self.assertEqual(include.read_bytes(), expected)
+                    verify.assert_any_call("wg", expected, 0)
+                    self.assertEqual((evidence / "local.projected").read_bytes(), prior)
+                    self.assertIn(b"+" + rule, (evidence / "standalone.diff").read_bytes())
+
     def test_conflict_and_failed_verification_preserve_policy(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

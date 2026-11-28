@@ -10,6 +10,7 @@ import hashlib
 import os
 from pathlib import Path
 import platform
+import stat
 import subprocess
 import sys
 import tempfile
@@ -21,6 +22,10 @@ EVIDENCE = Path("/var/lib/borealis/apparmor")
 CRI = "cri-containerd.apparmor.d"
 SIGNAL = b"  signal (send,receive) peer=cri-containerd.apparmor.d,\n"
 PEER = b"  signal (send,receive) peer=cri-containerd.apparmor.d//&unconfined,\n"
+
+
+WG_PROJECTED_HASH = "c0db79965e1839874765fca6fda09220bebbcf5e9dc0642440f01a74622bc1df"
+WG_STANDALONE_KEY = b"  /opt/Borealis/Engine/Services/wireguard-tunnel/secrets/server_private.key r,\n"
 
 
 def projected_wireguard_key_rule():
@@ -56,13 +61,50 @@ def verify_kernel(name, expected, children, allow_absent=False):
         raise RuntimeError(f"Kernel policy differs from compiled {name}")
 
 
+def extend_projected_wireguard_include(target, vendor, evidence, prior, addition, corrected_hash):
+    # Only extend the exact previously installed and kernel-verified Borealis rule.
+    # Append on its verified inode to avoid replacing a concurrent administrator edit.
+    previous = checked(compiled(vendor), WG_PROJECTED_HASH)
+    verify_kernel("wg", previous, 0)
+    with os.fdopen(os.open(target, os.O_RDWR | os.O_APPEND | os.O_NOFOLLOW), "r+b", buffering=0) as stream:
+        current = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(current.st_mode) or current.st_nlink != 1
+                or not os.path.samestat(current, target.stat()) or stream.read() != prior):
+            raise RuntimeError("Preserve changed WireGuard administrator policy")
+        (evidence / "compiled.projected").write_bytes(previous)
+        (evidence / "local.projected").write_bytes(prior)
+        (evidence / "standalone.diff").write_bytes(b"".join(difflib.diff_bytes(
+            difflib.unified_diff, prior.splitlines(True), addition.splitlines(True),
+            fromfile=b"projected", tofile=bytes(target))))
+        try:
+            if stream.write(WG_STANDALONE_KEY) != len(WG_STANDALONE_KEY):
+                raise OSError("Incomplete WireGuard policy append")
+            os.fsync(stream.fileno())
+            corrected = checked(compiled(vendor), corrected_hash)
+            subprocess.run(["apparmor_parser", "-K", "-r", vendor], check=True)
+            verify_kernel("wg", corrected, 0)
+        except BaseException:
+            stream.seek(0)
+            after = stream.read()
+            if os.path.samestat(current, target.stat()) and after.startswith(prior) and addition.startswith(after):
+                stream.truncate(len(prior))
+                os.fsync(stream.fileno())
+                subprocess.run(["apparmor_parser", "-K", "-r", vendor], check=True)
+                verify_kernel("wg", previous, 0)
+            raise
+
+
 def reconcile(name, target, source, original, addition, baseline_hash, corrected_hash, children):
     if target.is_symlink() or target.parent.is_symlink():
         raise RuntimeError(f"Refusing symlink at {target}")
     existing = target.read_bytes() if target.exists() else None
+    evidence = EVIDENCE / name
+    if name == "wg" and existing == projected_wireguard_key_rule() and addition == existing + WG_STANDALONE_KEY:
+        checked((evidence / "compiled.original").read_bytes(), baseline_hash)
+        extend_projected_wireguard_include(target, source, evidence, existing, addition, corrected_hash)
+        return
     if existing is not None and existing != addition:
         raise RuntimeError(f"Preserve existing administrator policy at {target}")
-    evidence = EVIDENCE / name
     if existing is not None:
         corrected = checked(compiled(source), corrected_hash)
         try:
@@ -71,7 +113,13 @@ def reconcile(name, target, source, original, addition, baseline_hash, corrected
             # A previous run may have persisted the include just before a reboot.
             # Only replace the recorded, reviewed baseline in that case.
             baseline = checked((evidence / "compiled.original").read_bytes(), baseline_hash)
-            verify_kernel(name, baseline, children, allow_absent=name == CRI)
+            try:
+                verify_kernel(name, baseline, children, allow_absent=name == CRI)
+            except (ValueError, RuntimeError):
+                if name != "wg" or not (evidence / "compiled.projected").is_file():
+                    raise
+                previous = checked((evidence / "compiled.projected").read_bytes(), WG_PROJECTED_HASH)
+                verify_kernel(name, previous, children)
             subprocess.run(["apparmor_parser", "-K", "-r", source], check=True)
             verify_kernel(name, corrected, children)
         return
@@ -139,9 +187,10 @@ def main(root, k3s_binary):
         vendor = POLICY / "wg"
         if root == Path("/opt/Borealis") and vendor.exists():
             checked(vendor.read_bytes(), "8113198a4ae411072bdeb8774c5353512b7e501c24f5d04161eed8d5b17a5c08")
-            reconcile("wg", POLICY / "local/wg", vendor, vendor, projected_wireguard_key_rule(),
+            reconcile("wg", POLICY / "local/wg", vendor, vendor,
+                      projected_wireguard_key_rule() + WG_STANDALONE_KEY,
                       "90e72cb9a3ed22b813a55b16a5fd3091135c2c4b8ae515120b009d6c798119bd",
-                      "c0db79965e1839874765fca6fda09220bebbcf5e9dc0642440f01a74622bc1df", 0)
+                      "328e5e0222cb6ffaf695f3d40a439d073494715c11186b206b87e8c4e4c77aa0", 0)
 
 
 if __name__ == "__main__":
