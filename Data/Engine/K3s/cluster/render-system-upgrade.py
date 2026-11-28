@@ -2,9 +2,11 @@
 """Validate source-owned controller bounds and render the pinned manifest offline."""
 
 import json
+import os
 import pathlib
 import re
 import sys
+import tempfile
 
 
 CAPACITY_LIMIT = 2**53 - 1
@@ -163,8 +165,42 @@ def render_longhorn_driver(manifest, driver_bounds, wait_bounds):
     return "\n---\n".join(documents)
 
 
+def seed_small_business(directory):
+    """Publish complete defaults only for missing source-owned conversion inputs."""
+    groups = (
+        (("system-upgrade", "cert-manager-controller", "cert-manager-webhook", "cert-manager-cainjector"),
+         "50m", "64Mi", "500m", "256Mi"),
+        (("longhorn-manager",), "100m", "192Mi", "1", "512Mi"),
+        (("longhorn-ui", "longhorn-pre-pull", "longhorn-driver-deployer", "longhorn-driver-wait"),
+         "25m", "32Mi", "250m", "128Mi"),
+        (("longhorn-instance-manager",), None, "256Mi", "4", "1Gi"),
+    )
+    for names, cpu, memory, cpu_limit, memory_limit in groups:
+        requests = {"memory": memory}
+        if cpu is not None:
+            requests["cpu"] = cpu
+        bounds = {"requests": requests, "limits": {"cpu": cpu_limit, "memory": memory_limit}}
+        for name in names:
+            target = directory / f"{name}-resources.json"
+            if os.path.lexists(target):
+                continue
+            with tempfile.NamedTemporaryFile(mode="w", dir=directory, prefix=".resource-") as source:
+                json.dump(bounds, source, indent=2)
+                source.write("\n")
+                source.flush()
+                os.fchmod(source.fileno(), 0o644)
+                try:
+                    os.link(source.name, target)
+                except FileExistsError:
+                    # A concurrent deployment or operator supplied the file first.
+                    pass
+
+
 def main():
     try:
+        if len(sys.argv) == 3 and sys.argv[1] == "seed-small-business":
+            seed_small_business(pathlib.Path(sys.argv[2]))
+            return 0
         if len(sys.argv) == 3 and sys.argv[1] == "config":
             result = read_resources(sys.argv[2])
         elif len(sys.argv) == 4 and sys.argv[1] == "manifest":

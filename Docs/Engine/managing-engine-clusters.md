@@ -77,9 +77,18 @@ The replacement workflow retains its surviving-source selection and readiness ch
 
 ### Set Controller Resource Bounds
 
-Before approved conversion, provide explicit CPU and memory requests and limits for system-upgrade, the cert-manager controller, webhook and cainjector, both Longhorn manager containers, Longhorn UI, and the driver-deployer main and wait-init containers on the first Engine. Longhorn’s pre-pull container stays running alongside its manager and needs its own bounds. The driver-deployer’s wait container runs as a sequential init and also needs separate bounds. Their upstream manifests have no bounds, and Borealis has no measured defaults for these controllers. Choose values for your workload; these do not replace calculated host sizing or prove capacity.
+On a standalone **Small Business** Engine, deployment creates any missing files for the following components under `Engine/Deploy`. Review the values before conversion. To override a component, edit its file before enabling the cluster. Redeployment preserves existing files. Other profiles require explicit values for these components.
 
-Create `Engine/Deploy/system-upgrade-resources.json`, `Engine/Deploy/cert-manager-controller-resources.json`, `Engine/Deploy/cert-manager-webhook-resources.json`, `Engine/Deploy/cert-manager-cainjector-resources.json`, `Engine/Deploy/longhorn-manager-resources.json`, `Engine/Deploy/longhorn-pre-pull-resources.json`, `Engine/Deploy/longhorn-ui-resources.json`, `Engine/Deploy/longhorn-driver-deployer-resources.json` and `Engine/Deploy/longhorn-driver-wait-resources.json` under your Borealis installation. Use this structure in each file, replacing every placeholder with values approved for that component:
+| Component | CPU request | Memory request | CPU limit | Memory limit |
+| --- | ---: | ---: | ---: | ---: |
+| System-upgrade controller and each cert-manager component (controller, webhook, cainjector) | 50m | 64Mi | 500m | 256Mi |
+| Longhorn manager | 100m | 192Mi | 1 | 512Mi |
+| Longhorn UI, pre-pull, driver-deployer, and wait-init (each) | 25m | 32Mi | 250m | 128Mi |
+| Longhorn instance manager | Calculated by Longhorn on each node | 256Mi | 4 | 1Gi |
+
+Conversion uses the original Engine’s validated files to configure the shared workloads and the storage-process admission policy. Joining Engines inherit those effective bounds, including source overrides. The seven [CSI component settings](#set-storage-service-bounds) are configured separately.
+
+The nine controller files are `system-upgrade-resources.json`, `cert-manager-controller-resources.json`, `cert-manager-webhook-resources.json`, `cert-manager-cainjector-resources.json`, `longhorn-manager-resources.json`, `longhorn-pre-pull-resources.json`, `longhorn-ui-resources.json`, `longhorn-driver-deployer-resources.json` and `longhorn-driver-wait-resources.json`. Use this structure in each file, replacing every placeholder with values approved for that component:
 
 ```json
 {
@@ -161,7 +170,7 @@ Borealis checks the service Deployments, storage connector DaemonSet and their o
 
 ### Set Storage-process Bounds
 
-Before approved conversion, create `Engine/Deploy/longhorn-instance-manager-resources.json` alongside the nine controller files above. Supply approved memory requests and CPU/memory caps:
+Review `Engine/Deploy/longhorn-instance-manager-resources.json` alongside the nine controller files before conversion. Small Business deployments generate the values above. For an override or a profile without defaults, supply the memory request and CPU/memory limits:
 
 ```json
 {

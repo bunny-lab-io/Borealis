@@ -248,6 +248,60 @@ spec:
 
 
 class SystemUpgradeResourceTests(unittest.TestCase):
+    def test_profile_seeds_missing_source_bounds_and_preserves_overrides(self):
+        def deploy(directory, *profile):
+            subprocess.run(
+                ["bash", "-c",
+                 'source "$1/Engine.sh"; DEPLOY_DIR=$2; shift 2; '
+                 'load_profile_tuning "$@"; ensure_profile_infrastructure_resources',
+                 "bash", str(ROOT), str(directory), *profile],
+                env={**os.environ, "BOREALIS_ENGINE_LIBRARY_MODE": "1"}, check=True,
+            )
+
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            for profile in (("4", "8192"), ("20", "49152"), ("32", "98304"),
+                            ("32", "98304", "1", "32071")):
+                deploy(directory, *profile)
+                self.assertEqual(list(directory.iterdir()), [])
+            deploy(directory, "16", "32071")
+            expected = {
+                "system-upgrade": ("50m", "64Mi", "500m", "256Mi"),
+                "cert-manager-controller": ("50m", "64Mi", "500m", "256Mi"),
+                "cert-manager-webhook": ("50m", "64Mi", "500m", "256Mi"),
+                "cert-manager-cainjector": ("50m", "64Mi", "500m", "256Mi"),
+                "longhorn-manager": ("100m", "192Mi", "1", "512Mi"),
+                "longhorn-ui": ("25m", "32Mi", "250m", "128Mi"),
+                "longhorn-pre-pull": ("25m", "32Mi", "250m", "128Mi"),
+                "longhorn-driver-deployer": ("25m", "32Mi", "250m", "128Mi"),
+                "longhorn-driver-wait": ("25m", "32Mi", "250m", "128Mi"),
+                "longhorn-instance-manager": (None, "256Mi", "4", "1Gi"),
+            }
+            self.assertEqual({p.name for p in directory.iterdir()},
+                             {f"{name}-resources.json" for name in expected})
+            for name, (cpu, memory, cap, memcap) in expected.items():
+                path = directory / f"{name}-resources.json"
+                renderer = "render-system-upgrade.py" if cpu else "render-longhorn-instance-manager.py"
+                actual = json.loads(subprocess.check_output([sys.executable, CLUSTER / renderer, "config", path]))
+                requests = {"memory": memory}
+                if cpu:
+                    requests["cpu"] = cpu
+                self.assertEqual(actual, {"requests": requests, "limits": {"cpu": cap, "memory": memcap}})
+            override = directory / "system-upgrade-resources.json"
+            custom = json.dumps(BOUNDS, indent=4)
+            override.write_text(custom)
+            missing = directory / "longhorn-manager-resources.json"
+            missing.unlink()
+            deploy(directory, "16", "32071")
+            self.assertEqual(override.read_text(), custom)
+            self.assertTrue(missing.is_file())
+            _, workload = yaml.safe_load_all(RENDERER.render(MANIFEST, RENDERER.read_resources(override)))
+            self.assertEqual(workload["spec"]["template"]["spec"]["containers"][0]["resources"], BOUNDS)
+            override.write_text("{}")
+            deploy(directory, "16", "32071")
+            with self.assertRaises(ValueError):
+                RENDERER.read_resources(override)
+
     def test_render_preserves_pinned_objects_except_resources(self):
         for cpu, memory in (("100m", "128Mi"), ("0.125", "256M"), ("8", "2Gi")):
             value = copy.deepcopy(BOUNDS)

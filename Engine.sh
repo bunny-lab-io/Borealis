@@ -10275,6 +10275,14 @@ validate_build_role() {
   die "Unknown Engine build role '${service}'."
 }
 
+ensure_profile_infrastructure_resources() {
+  # The original Engine owns these conversion inputs. Joined nodes consume the
+  # resulting shared workloads and admission policy, including explicit overrides.
+  if [[ "${PROFILE_RANK}" == "1" && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]]; then
+    python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" seed-small-business "${DEPLOY_DIR}"
+  fi
+}
+
 prepare_runtime() {
   local mode="$1"
   ensure_engine_runtime_identity
@@ -10306,6 +10314,7 @@ prepare_runtime() {
   fi
   traefik_trusted_proxy_ips="$(resolve_traefik_trusted_proxy_ips "${engine_profile}")"
   write_compose_env "${mode}" "${public_host}" "${acme_email}" "${traefik_trusted_proxy_ips}" "${engine_profile}" "${fqdn_aliases}"
+  ensure_profile_infrastructure_resources
 }
 
 deploy_engine() {
