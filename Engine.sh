@@ -9183,6 +9183,25 @@ ensure_profile_infrastructure_resources() {
   fi
 }
 
+ensure_profile_csi_resources() {
+  [[ "${PROFILE_RANK}" == "1" && -z "${PROFILE_CLUSTER_SIZING_RANK}" ]] || return 0
+  k3s_longhorn_enabled || return 0
+  local setting="settings.longhorn.io/system-managed-csi-components-resource-limits"
+  local patch attempt
+  for attempt in 1 2 3; do
+    patch="$(k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" get "${setting}" -o json \
+      | python3 "${K3S_CLUSTER_ASSET_DIR}/render-system-upgrade.py" small-business-csi-patch)" \
+      || die "Cannot read Small Business Longhorn CSI resource settings."
+    [[ -n "${patch}" ]] || return 0
+    if k3s_kubectl -n "${K3S_LONGHORN_NAMESPACE}" patch "${setting}" --type=json -p "${patch}" >> "${BUILD_LOG}" 2>&1; then
+      log_status "k3s-longhorn-storage" "Applied missing Small Business CSI defaults" "${C_GREEN}"
+      return 0
+    fi
+    printf 'Longhorn CSI setting patch attempt %s failed.\n' "${attempt}" >> "${BUILD_LOG}"
+  done
+  die "Cannot update Small Business Longhorn CSI resource settings. See ${BUILD_LOG}."
+}
+
 write_compose_env() {
   local mode="$1"
   local public_host="$2"
@@ -10336,6 +10355,7 @@ deploy_engine() {
   local previous_internal_api_base_url=""
   previous_internal_api_base_url="$(read_env_value BOREALIS_INTERNAL_API_BASE_URL)"
   prepare_runtime "${mode}"
+  ensure_profile_csi_resources
   ensure_engine_agent_install_cache
   build_images "${mode}"
   ensure_borealis_node_manager

@@ -196,12 +196,38 @@ def seed_small_business(directory):
                     pass
 
 
+def small_business_csi_patch(setting):
+    """Fill absent entries in the shared Longhorn Setting using optimistic concurrency."""
+    current = setting["value"]
+    entries = json.loads(current or "{}", object_pairs_hook=unique_object)
+    if not isinstance(current, str) or not isinstance(entries, dict):
+        raise ValueError("invalid CSI setting")
+    groups = (
+        (("csi-attacher", "csi-provisioner", "csi-resizer", "csi-snapshotter"), "25m", "64Mi", "250m", "128Mi"),
+        (("longhorn-csi-plugin",), "50m", "64Mi", "500m", "256Mi"),
+        (("node-driver-registrar", "longhorn-liveness-probe"), "10m", "32Mi", "100m", "64Mi"),
+    )
+    initial_count = len(entries)
+    for names, cpu, memory, cpu_limit, memory_limit in groups:
+        for name in names:
+            entries.setdefault(name, {"requests": {"cpu": cpu, "memory": memory},
+                                      "limits": {"cpu": cpu_limit, "memory": memory_limit}})
+    if len(entries) == initial_count:
+        return ""
+    return json.dumps([
+        {"op": "test", "path": "/metadata/resourceVersion", "value": setting["metadata"]["resourceVersion"]},
+        {"op": "replace", "path": "/value", "value": json.dumps(entries, separators=(",", ":"))},
+    ])
+
+
 def main():
     try:
         if len(sys.argv) == 3 and sys.argv[1] == "seed-small-business":
             seed_small_business(pathlib.Path(sys.argv[2]))
             return 0
-        if len(sys.argv) == 3 and sys.argv[1] == "config":
+        if sys.argv[1:] == ["small-business-csi-patch"]:
+            result = small_business_csi_patch(json.load(sys.stdin))
+        elif len(sys.argv) == 3 and sys.argv[1] == "config":
             result = read_resources(sys.argv[2])
         elif len(sys.argv) == 4 and sys.argv[1] == "manifest":
             result = render(pathlib.Path(sys.argv[2]).read_text(encoding="utf-8"), sys.argv[3])

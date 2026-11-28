@@ -302,6 +302,70 @@ class SystemUpgradeResourceTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 RENDERER.read_resources(override)
 
+    def test_csi_defaults_and_optimistic_patch_preserve_existing_entries(self):
+        original = {"metadata": {"resourceVersion": "27"}, "value": ""}
+        patch = json.loads(RENDERER.small_business_csi_patch(original))
+        self.assertEqual(patch[0], {"op": "test", "path": "/metadata/resourceVersion", "value": "27"})
+        self.assertEqual(patch[1]["path"], "/value")
+        effective = json.loads(patch[1]["value"])
+        expected = {}
+        for name in ("csi-attacher", "csi-provisioner", "csi-resizer", "csi-snapshotter"):
+            expected[name] = ("25m", "64Mi", "250m", "128Mi")
+        expected["longhorn-csi-plugin"] = ("50m", "64Mi", "500m", "256Mi")
+        for name in ("node-driver-registrar", "longhorn-liveness-probe"):
+            expected[name] = ("10m", "32Mi", "100m", "64Mi")
+        self.assertEqual(set(effective), set(expected))
+        for name, (cpu, mem, cap, memcap) in expected.items():
+            self.assertEqual(effective[name], {"requests": {"cpu": cpu, "memory": mem},
+                                               "limits": {"cpu": cap, "memory": memcap}})
+        override = {"csi-attacher": BOUNDS, "future-component": {"extra": True}}
+        original["value"] = json.dumps(override)
+        merged = json.loads(json.loads(RENDERER.small_business_csi_patch(original))[1]["value"])
+        self.assertEqual(merged, {**effective, **override})
+        original["value"] = json.dumps(merged)
+        self.assertEqual(RENDERER.small_business_csi_patch(original), "")
+        for invalid in ('[]', '{"a":{},"a":{}}', 'not-json'):
+            with self.assertRaises(ValueError):
+                RENDERER.small_business_csi_patch({**original, "value": invalid})
+
+    def test_csi_deployment_rechecks_conflicts_and_skips_matching_or_inherited_settings(self):
+        script = r"""
+source "$1/Engine.sh"
+cd "$2"
+BUILD_LOG="$PWD/build.log"
+log_status() { :; }
+k3s_kubectl() {
+  case "$3" in
+    get) cat setting.json ;;
+    patch)
+      if [[ ! -f conflict ]]; then
+        touch conflict
+        echo '{"metadata":{"resourceVersion":"28"},"value":"{\"csi-resizer\":{}}"}' > setting.json
+        return 1
+      fi
+      python3 -c 'import json,sys; p=json.loads(sys.argv[1]); assert p[0]["value"]=="28"; print(json.dumps({"metadata":{"resourceVersion":"29"},"value":p[1]["value"]}))' "${!#}" > setting.json
+      echo applied >> calls
+      ;;
+    *) return 1 ;;
+  esac
+}
+PROFILE_RANK=0 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
+PROFILE_RANK=1 PROFILE_CLUSTER_SIZING_RANK=1 ensure_profile_csi_resources
+test ! -e calls && test ! -e conflict
+PROFILE_RANK=1 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
+PROFILE_RANK=1 PROFILE_CLUSTER_SIZING_RANK="" ensure_profile_csi_resources
+"""
+        with tempfile.TemporaryDirectory() as tmp:
+            directory = pathlib.Path(tmp)
+            setting = directory / "setting.json"
+            setting.write_text('{"metadata":{"resourceVersion":"27"},"value":""}')
+            subprocess.run(["bash", "-ec", script, "bash", str(ROOT), tmp],
+                           env={**os.environ, "BOREALIS_ENGINE_LIBRARY_MODE": "1"}, check=True)
+            self.assertEqual((directory / "calls").read_text(), "applied\n")
+            effective = json.loads(json.loads(setting.read_text())["value"])
+            self.assertEqual(effective["csi-resizer"], {})
+            self.assertEqual(len(effective), 7)
+
     def test_render_preserves_pinned_objects_except_resources(self):
         for cpu, memory in (("100m", "128Mi"), ("0.125", "256M"), ("8", "2Gi")):
             value = copy.deepcopy(BOUNDS)

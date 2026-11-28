@@ -42,7 +42,7 @@ The CPU and RAM bands below describe current automatic profile selection **per E
     | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
     | Non-clustered (1 Engine) or clustered (3 Engines) | Smaller production environments | About 100-200 | 2-4 | 8-15 | 16-31 GiB | 8 | Standalone 150-250 GiB / clustered 240 GB minimum |
 
-    During standalone setup or redeployment, this profile fills in missing cluster infrastructure resource files under `Engine/Deploy`. Existing files retain the operator’s values. Review the [controller and storage-process defaults](managing-engine-clusters.md#set-controller-resource-bounds) before enabling clustering.
+    During standalone setup or redeployment, this profile fills in missing cluster infrastructure resource files under `Engine/Deploy`. Existing files retain the operator’s values. With Longhorn enabled, deployment also fills missing entries in its shared [CSI resource setting](managing-engine-clusters.md#set-storage-service-bounds). Existing component overrides are preserved and joining Engines use the effective cluster setting. Review the [controller and storage-process defaults](managing-engine-clusters.md#set-controller-resource-bounds) before enabling clustering.
 
 === "MSP / Production (Clustered)"
     | Topology | Typical use | Endpoints | Active operators | vCPU per Engine | RAM per Engine | Scheduled slots per site worker | NVMe per Engine |
