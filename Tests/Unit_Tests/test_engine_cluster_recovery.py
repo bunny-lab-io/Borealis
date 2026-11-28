@@ -321,7 +321,7 @@ k3s --version
         result = self.run_engine_library(
             r'''
 systemd_unit_file_exists() { return 0; }
-run_privileged() { return 0; }
+run_privileged() { echo active; }
 classify_longhorn_multipath_maps() {
   [[ "$1" == "other" ]] && printf '%s\n' 'production-san'
 }
@@ -348,9 +348,15 @@ run_privileged() {
     : >"$BOREALIS_TEST_STATE"
     return 0
   fi
-  if [[ "$1" == "systemctl" && ("$2" == "is-active" || "$2" == "is-enabled") ]]; then
-    [[ ! -e "$BOREALIS_TEST_STATE" ]]
-    return
+  if [[ "$2" == "show" ]]; then
+    if [[ ! -e "$BOREALIS_TEST_STATE" ]]; then
+      echo active
+    elif [[ "$4" == "--property=ActiveState" ]]; then
+      echo inactive
+    elif [[ "$4" == "--property=UnitFileState" ]]; then
+      echo disabled
+    fi
+    return 0
   fi
   return 70
 }
@@ -367,6 +373,40 @@ ensure_longhorn_multipath_compatibility
                 calls.read_text(encoding="utf-8").strip(),
                 "systemctl disable --now multipathd.service multipathd.socket",
             )
+
+    def test_longhorn_static_multipath_socket_requires_no_activation(self):
+        for activity, dependency, success in [
+            ("inactive", "", True),
+            ("active", "", False),
+            ("inactive", "sockets.target", False),
+        ]:
+            with self.subTest(activity=activity, dependency=dependency), tempfile.TemporaryDirectory() as tmp:
+                result = self.run_engine_library(
+                    r'''
+BUILD_LOG="$TEST_LOG"
+systemd_unit_file_exists() { return 0; }
+classify_longhorn_multipath_maps() { return 0; }
+run_privileged() {
+  case "$2/$3/$4" in
+    show/multipathd.service/--property=ActiveState) echo inactive ;;
+    show/multipathd.service/--property=UnitFileState) echo disabled ;;
+    show/multipathd.socket/--property=ActiveState) echo "$TEST_ACTIVITY" ;;
+    show/multipathd.socket/--property=UnitFileState) echo static ;;
+    show/multipathd.socket/--value) echo "$TEST_DEPENDENCY" ;;
+    disable/--now/*) echo 'disable attempted' ;;
+    *) exit 91 ;;
+  esac
+}
+ensure_longhorn_multipath_compatibility
+''',
+                    extra_env={"TEST_ACTIVITY": activity, "TEST_DEPENDENCY": dependency,
+                               "TEST_LOG": str(pathlib.Path(tmp) / "build.log")},
+                )
+                self.assertEqual(result.returncode == 0, success, result.stdout + result.stderr)
+                if success:
+                    self.assertFalse((pathlib.Path(tmp) / "build.log").exists())
+                else:
+                    self.assertIn("multipathd.socket did not reach a quiescent state", result.stderr)
 
     def test_debian_longhorn_dependency_install_waits_for_apt_lock(self):
         with tempfile.TemporaryDirectory() as temp_dir:

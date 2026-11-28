@@ -57,7 +57,7 @@ Temporary, isolated development builds and immutable snapshot packaging may use 
 
 On November 27, 2026 the operator confirmed readiness. All three independently installed Ubuntu Server 26.04.1 LTS Minimal AMD64 guests ran on `cluster-node-01` (`192.168.3.4`). Each had a powered-off `clean-ubuntu-baseline` snapshot, 16 vCPUs, 33 GiB assigned RAM (31.32 GiB visible) and a 256 GiB SSD-emulated system disk. Each ext4 root initially had about 227 GiB available. Pinned SSH inspection confirmed distinct machine identities, the expected addresses and clean hosts before installation. Verify guest SSH keys through the trusted Proxmox console if identities change.
 
-The lab shares one physical host and clustered iSCSI storage backed by TrueNAS ZFS. This placement supports functional qualification only. Proxmox explicitly configured `cache=writeback` for VMs 117 and 118. VM 121 used the default cache mode with direct host I/O. Preserve these observations when evaluating storage behavior.
+The lab shares one physical host and clustered iSCSI storage backed by TrueNAS ZFS. This placement supports functional qualification only. All three system disks use explicit Proxmox `cache=writeback`. The operator corrected VM 121 before qualification and replaced its powered-off baseline snapshot. The saved snapshot and the running VM configuration both include write-back.
 
 Use public network mode for `borealis.bunny-lab.io` and set `BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.3.17`. The external Traefik initially forwards HTTPS and WireGuard to Node01. Preserve TCP 443 TLS/ALPN pass-through and UDP 30000 forwarding. Leave the VIP unassigned until conversion. Switch the proxy only under the separately authorized cutover procedure.
 

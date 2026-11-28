@@ -3176,6 +3176,31 @@ classify_longhorn_multipath_maps() {
   done
 }
 
+longhorn_multipath_unit_is_quiescent() {
+  local unit="$1"
+  local active file_state dependencies
+  active="$(run_privileged systemctl show "${unit}" --property=ActiveState --value)" \
+    || die "Cannot inspect ${unit} activity before Longhorn reconcile."
+  [[ -n "${active}" ]] || die "Missing ${unit} activity before Longhorn reconcile."
+  [[ "${active}" == "inactive" ]] || return 1
+  file_state="$(run_privileged systemctl show "${unit}" --property=UnitFileState --value)" \
+    || die "Cannot inspect ${unit} enablement before Longhorn reconcile."
+  [[ -n "${file_state}" ]] || die "Missing ${unit} enablement before Longhorn reconcile."
+  case "${file_state}" in
+    disabled|masked|masked-runtime) return 0 ;;
+    static)
+      [[ "${unit}" == "multipathd.socket" ]] || return 1
+      # Ubuntu can ship the socket without an installation target. Prove
+      # that no loaded unit pulls it in before treating it as quiescent.
+      dependencies="$(run_privileged systemctl show "${unit}" --value \
+        --property=WantedBy --property=RequiredBy --property=BoundBy --property=UpheldBy)" \
+        || die "Cannot inspect activation dependencies for ${unit}."
+      [[ -z "${dependencies}" ]]
+      ;;
+    *) return 1 ;;
+  esac
+}
+
 ensure_longhorn_multipath_compatibility() {
   local -a multipath_units=()
   local unit=""
@@ -3188,8 +3213,7 @@ ensure_longhorn_multipath_compatibility() {
 
   local enabled_or_active=0
   for unit in "${multipath_units[@]}"; do
-    if run_privileged systemctl is-active --quiet "${unit}" 2>/dev/null \
-      || run_privileged systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
+    if ! longhorn_multipath_unit_is_quiescent "${unit}"; then
       enabled_or_active=1
     fi
   done
@@ -3220,9 +3244,8 @@ ensure_longhorn_multipath_compatibility() {
     fi
   done
   for unit in "${multipath_units[@]}"; do
-    if run_privileged systemctl is-active --quiet "${unit}" 2>/dev/null \
-      || run_privileged systemctl is-enabled --quiet "${unit}" 2>/dev/null; then
-      die "${unit} remained active or enabled after Longhorn multipath safety reconcile."
+    if ! longhorn_multipath_unit_is_quiescent "${unit}"; then
+      die "${unit} did not reach a quiescent state after Longhorn multipath safety reconcile."
     fi
   done
   mapfile -t longhorn_maps < <(classify_longhorn_multipath_maps "longhorn")
