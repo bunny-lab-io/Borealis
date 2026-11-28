@@ -186,6 +186,16 @@ class DevelopmentSnapshotTests(unittest.TestCase):
             file.write_text(instructions + "COPY Data/Engine/K3s/cluster /etc/cluster\n")
             self.assertIsNone(choose())
             file.write_text(instructions)
+            lock = update.MODULE + "internal/clusterbootstrap/host_packages.resolute.lock.json"
+            retained.current[lock] = "new embedded release lock"
+            retained.current[update.MODULE + "cmd/manager/testdata/solver.txt"] = "new solver fixture"
+            action = "Data/Engine/K3s/cluster/render-system-upgrade.py"
+            retained.current[action] = "changed deployment script"
+            paths.add(action)
+            self.assertEqual(choose(), [("api-backend", "/usr/local/bin/server")])
+            file.write_text(instructions + "COPY " + lock + " /etc/package-lock.json\n")
+            self.assertIsNone(choose())
+            file.write_text(instructions)
             retained.current["Dockerfile"] = "different"
             self.assertIsNone(choose())
             retained.current["Dockerfile"] = "original"

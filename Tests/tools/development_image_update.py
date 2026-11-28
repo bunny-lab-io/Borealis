@@ -22,10 +22,17 @@ def binary_layer(role, snapshot, item, declared):
     # Deployment metadata stays in the frozen bootstrap. Some roles also
     # declare it as a build input, so check every COPY before reusing layers.
     metadata = {Path(name) for name in declared if name == "Data/Engine/release-manifest.json"
-                or (name.startswith("Data/Engine/K3s/cluster/") and name.endswith(".yaml"))}
-    binary_changes = declared - {str(path) for path in metadata}
-    if not binary_changes or any(not n.startswith(MODULE) or not n.endswith((".go", "/go.mod", "/go.sum")) for n in binary_changes):
+                or (name.startswith("Data/Engine/K3s/cluster/") and name.endswith((".yaml", ".py")))}
+    compiled = declared - {str(path) for path in metadata}
+    package_locks = {MODULE + "internal/clusterbootstrap/" + name for name in
+                     ("host_packages.lock.json", "host_packages.resolute.lock.json")}
+    if not compiled or any(not n.startswith(MODULE) or not (
+            n.endswith((".go", "/go.mod", "/go.sum")) or n in package_locks or "/testdata/" in n)
+            for n in compiled):
         return None
+    # Every changed source file must be carried by the rebuilt binaries or the
+    # bootstrap alone. Reject any Dockerfile that copies those files directly.
+    changed_paths = {Path(n) for n in declared}
     # Apply this shortcut only to known Dockerfiles whose post-COPY effects
     # consist of setting executable modes. Other instructions require a full build.
     file = snapshot / item["dockerfile"]
@@ -40,11 +47,10 @@ def binary_layer(role, snapshot, item, declared):
             copy_seen = True
             if len(parts) != 3 or not parts[2].startswith("/"):
                 return None
-            if metadata:
-                source = Path(parts[1])
-                if (not re.fullmatch(r"[A-Za-z0-9_./-]+", parts[1]) or source.is_absolute()
-                        or ".." in source.parts or any(path.is_relative_to(source) for path in metadata)):
-                    return None
+            source = Path(parts[1])
+            if (not re.fullmatch(r"[A-Za-z0-9_./-]+", parts[1]) or source.is_absolute()
+                    or ".." in source.parts or any(path.is_relative_to(source) for path in changed_paths)):
+                return None
             if parts[1].startswith(DIST):
                 name = parts[1][len(DIST):]
                 if not re.fullmatch(r"[a-z][a-z0-9-]+", name) or not re.fullmatch(r"/usr/local/bin/[a-z][a-z0-9-]+", parts[2]):

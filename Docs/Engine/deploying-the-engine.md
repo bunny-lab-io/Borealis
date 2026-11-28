@@ -332,6 +332,8 @@ You will be asked as series of questions during initial setup for a new engine. 
       --repo-branch "${BOREALIS_DEV_REF}" deploy dev
     ```
 
+    For a development lab that will use paired onboarding, provision the verified local catalog and its root-owned opt-in before the first `deploy prod`. Install the exact source commit used as the development package’s `--base-sha`. Keep the full descendant candidate available for the managed update after conversion. The initial untagged checkout retains its short development identity until promotion. See [Package a local development revision](publishing-engine-releases.md#package-a-local-development-revision).
+
 ## First Run Checklist
 After deployment finishes:
 
