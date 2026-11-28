@@ -48,16 +48,18 @@ Temporary, isolated development builds and immutable snapshot packaging may use 
 
 ### Dedicated development lab
 
-| Hostname or endpoint | IPv4 | Initial role |
-|---|---|---|
-| `borealis-node-01` | `192.168.3.18` | Initial Engine |
-| `borealis-node-02` | `192.168.3.19` | Joining Engine |
-| `borealis-node-03` | `192.168.3.20` | Joining Engine |
-| Cluster VIP | `192.168.3.10` | Shared cluster endpoint |
+| Hostname or endpoint | IPv4 | Proxmox VM ID | Initial role |
+|---|---|---:|---|
+| `borealis-node-01` | `192.168.3.18` | 117 | Initial standalone Engine |
+| `borealis-node-02` | `192.168.3.19` | 118 | Clean joining host |
+| `borealis-node-03` | `192.168.3.20` | 121 | Clean joining host |
+| Cluster VIP | `192.168.3.10` | — | Reserved for cluster conversion |
 
-The operator is provisioning three independently installed, fully updated Ubuntu Server 26.04.1 guests, each with 16 vCPUs, 33 GB RAM and 256 GB system storage. This lab uses Proxmox VE, shared clustered iSCSI on TrueNAS ZFS, Proxmox write-back disk caching and SSD emulation. VM IDs and physical host placement await operator confirmation. Shared storage limits the failure domains this lab can qualify.
+On November 27, 2026 the operator confirmed readiness. All three independently installed Ubuntu Server 26.04.1 LTS Minimal AMD64 guests ran on `cluster-node-01` (`192.168.3.4`). Each had a powered-off `clean-ubuntu-baseline` snapshot, 16 vCPUs, 33 GiB assigned RAM (31.32 GiB visible) and a 256 GiB SSD-emulated system disk. Each ext4 root initially had about 227 GiB available. Pinned SSH inspection confirmed distinct machine identities, the expected addresses and clean hosts before installation. Verify guest SSH keys through the trusted Proxmox console if identities change.
 
-Wait for explicit readiness confirmation before connecting. Verify each new guest and its distinct SSH host fingerprint through a trusted channel. Use fresh host, VM and runtime identities. The edge reverse proxy initially targets Node01 at `192.168.3.18`; move it to `192.168.3.10` after successful clustering under the authorized cutover procedure.
+The lab shares one physical host and clustered iSCSI storage backed by TrueNAS ZFS. This placement supports functional qualification only. Proxmox explicitly configured `cache=writeback` for VMs 117 and 118. VM 121 used the default cache mode with direct host I/O. Preserve these observations when evaluating storage behavior.
+
+Use public network mode for `borealis.bunny-lab.io` and set `BOREALIS_TRAEFIK_TRUSTED_PROXY_IPS=192.168.3.17`. The external Traefik initially forwards HTTPS and WireGuard to Node01. Preserve TCP 443 TLS/ALPN pass-through and UDP 30000 forwarding. Leave the VIP unassigned until conversion. Switch the proxy only under the separately authorized cutover procedure.
 
 Start from a clean Node01 installation with a new database and Aegis identity, no managed devices and no onboarding journals. Use the normal WebUI pair workflow. Preserve the retired lab and its stopped operation offline for evidence. Its pins, recovery packages, boot handoff, journals and execution authorizations belong exclusively to that lab. Do not contact or resume it.
 
